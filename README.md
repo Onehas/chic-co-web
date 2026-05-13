@@ -1,5 +1,5 @@
 # Chic & Co
 
-Importando la web estatica de Chic & Co.
+Web estatica para administrar el salon de belleza Chic & Co.
 
-Ultima importacion solicitada: 2026-05-13.
+Publicada con GitHub Pages.
