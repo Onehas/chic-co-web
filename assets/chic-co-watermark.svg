@@ -1,0 +1,15 @@
+<svg width="520" height="320" viewBox="0 0 520 320" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="softGold" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#d4ad75" stop-opacity="0.72" />
+      <stop offset="0.5" stop-color="#9f7548" stop-opacity="0.58" />
+      <stop offset="1" stop-color="#e8c891" stop-opacity="0.72" />
+    </linearGradient>
+  </defs>
+  <g fill="url(#softGold)" text-anchor="middle">
+    <text x="260" y="142" font-family="Georgia, 'Times New Roman', serif" font-size="82" letter-spacing="-10">C C</text>
+    <circle cx="260" cy="118" r="24" fill="none" stroke="url(#softGold)" stroke-width="6" />
+    <text x="260" y="129" font-family="Georgia, 'Times New Roman', serif" font-size="30" font-weight="700">&amp;</text>
+    <text x="260" y="206" font-family="Georgia, 'Times New Roman', serif" font-size="44" letter-spacing="11">CHIC &amp; CO</text>
+  </g>
+</svg>

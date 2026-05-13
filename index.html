@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Chic & Co Salon Software</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="is-login">
+    <section class="login-screen" id="loginScreen" aria-labelledby="loginTitle">
+      <div class="login-panel">
+        <div class="login-brand">
+          <img src="assets/chic-co-logo-black.png" alt="Chic & Co" />
+          <div>
+            <p class="eyebrow">Chic & Co</p>
+            <h1 id="loginTitle">Acceso interno</h1>
+          </div>
+        </div>
+
+        <form class="login-form" id="loginForm" autocomplete="off">
+          <label class="field">
+            <span>Email</span>
+            <input id="loginEmail" name="email" type="email" placeholder="correo@dominio.com" required />
+          </label>
+
+          <label class="field">
+            <span>Contrasena</span>
+            <input id="loginPassword" name="password" type="password" required />
+          </label>
+
+          <p class="login-error" id="loginError" role="alert" aria-live="polite"></p>
+          <button class="primary-action" type="submit">Entrar</button>
+        </form>
+      </div>
+    </section>
+
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">C&C</div>
+        <div class="brand-copy">
+          <strong>Chic & Co</strong>
+          <span>Salon Suite</span>
+        </div>
+      </div>
+
+      <nav class="main-nav" aria-label="Navegacion principal">
+        <button class="nav-link has-menu" type="button" data-menu="sucursal">
+          Sucursal
+          <span class="chevron">v</span>
+        </button>
+      </nav>
+
+      <div class="top-actions">
+        <button class="icon-button" type="button" data-quick="sync" aria-label="Sincronizar">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M20 6v5h-5" />
+            <path d="M4 18v-5h5" />
+            <path d="M6.5 9A6 6 0 0 1 17 6.6L20 11" />
+            <path d="M17.5 15A6 6 0 0 1 7 17.4L4 13" />
+          </svg>
+        </button>
+        <button class="icon-button" type="button" data-quick="transfer" aria-label="Cambiar turno">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M7 7h13" />
+            <path d="m16 3 4 4-4 4" />
+            <path d="M17 17H4" />
+            <path d="m8 13-4 4 4 4" />
+          </svg>
+        </button>
+        <button class="user-menu has-menu" type="button" data-menu="usuario">
+          <span id="currentUserName">Andres</span>
+          <span class="chevron">v</span>
+        </button>
+      </div>
+    </header>
+
+    <div class="dropdown-layer" id="dropdownLayer" aria-live="polite"></div>
+
+    <main class="app-shell">
+      <aside class="sidebar" aria-label="Modulos del salon">
+        <section class="sidebar-brand">
+          <img src="assets/chic-co-logo-black.png" alt="Chic & Co" />
+          <div>
+            <p class="eyebrow">Software interno</p>
+            <h1>Administracion del salon</h1>
+          </div>
+        </section>
+
+        <nav class="module-grid" aria-label="Opciones principales">
+          <button class="module-button is-active" type="button" data-module="clientes">
+            <span class="module-icon">
+              <svg viewBox="0 0 64 64" aria-hidden="true">
+                <circle cx="24" cy="24" r="10" />
+                <path d="M9 52c3-13 27-13 30 0" />
+                <circle cx="43" cy="27" r="8" />
+                <path d="M37 52c2-8 16-8 18 0" />
+              </svg>
+            </span>
+            <span class="module-label">
+              <strong>Clientes</strong>
+              <small>Historial y contacto</small>
+            </span>
+          </button>
+
+          <button class="module-button" type="button" data-module="inventario">
+            <span class="module-icon">
+              <svg viewBox="0 0 64 64" aria-hidden="true">
+                <path d="M14 20 32 10l18 10v25L32 55 14 45z" />
+                <path d="M14 20 32 30l18-10" />
+                <path d="M32 30v25" />
+                <path d="M23 15l18 10" />
+              </svg>
+            </span>
+            <span class="module-label">
+              <strong>Inventario</strong>
+              <small>Productos y stock</small>
+            </span>
+          </button>
+
+          <button class="module-button" type="button" data-module="procedimientos">
+            <span class="module-icon">
+              <svg viewBox="0 0 64 64" aria-hidden="true">
+                <path d="M18 46c9-20 24-20 33-30" />
+                <path d="M13 52c12-3 20-12 24-25" />
+                <path d="M43 15l7-3 2 7" />
+                <path d="M18 19h12" />
+                <path d="M16 28h9" />
+                <path d="M40 45h10" />
+              </svg>
+            </span>
+            <span class="module-label">
+              <strong>Procedimientos</strong>
+              <small>Servicios esteticos</small>
+            </span>
+          </button>
+
+          <button class="module-button" type="button" data-module="enCurso">
+            <span class="module-icon">
+              <svg viewBox="0 0 64 64" aria-hidden="true">
+                <path d="M18 16h28v36H18z" />
+                <path d="M24 12h16v8H24z" />
+                <path d="M25 31h15" />
+                <path d="M25 39h10" />
+                <path d="M43 38l5 5 8-11" />
+              </svg>
+            </span>
+            <span class="module-label">
+              <strong>En curso</strong>
+              <small>Sesiones activas</small>
+            </span>
+          </button>
+
+          <button class="module-button" type="button" data-module="planes">
+            <span class="module-icon">
+              <svg viewBox="0 0 64 64" aria-hidden="true">
+                <path d="M16 16h32v38H16z" />
+                <path d="M16 26h32" />
+                <path d="M24 10v12" />
+                <path d="M40 10v12" />
+                <path d="M23 36h6" />
+                <path d="M35 36h6" />
+                <path d="M23 45h6" />
+                <path d="M35 45h6" />
+              </svg>
+            </span>
+            <span class="module-label">
+              <strong>Planes</strong>
+              <small>Larga duracion</small>
+            </span>
+          </button>
+
+          <button class="module-button" type="button" data-module="citas">
+            <span class="module-icon">
+              <svg viewBox="0 0 64 64" aria-hidden="true">
+                <path d="M16 18h32v34H16z" />
+                <path d="M16 27h32" />
+                <path d="M24 12v12" />
+                <path d="M40 12v12" />
+                <path d="M24 39l6-6v15" />
+                <path d="M36 34c8 0 8 12 0 12" />
+                <path d="M36 46h8" />
+              </svg>
+            </span>
+            <span class="module-label">
+              <strong>Citas</strong>
+              <small>Agenda del salon</small>
+            </span>
+          </button>
+
+          <button class="module-button" type="button" data-module="facturacion">
+            <span class="module-icon">
+              <svg viewBox="0 0 64 64" aria-hidden="true">
+                <path d="M18 10h28v44H18z" />
+                <path d="M24 21h16" />
+                <path d="M24 30h16" />
+                <path d="M24 39h8" />
+                <path d="M38 46c0-5 8-5 8 0s-8 3-8 8" />
+              </svg>
+            </span>
+            <span class="module-label">
+              <strong>Facturacion</strong>
+              <small>Clientes, IVA y pagos</small>
+            </span>
+          </button>
+
+          <button class="module-button" type="button" data-module="usuarios">
+            <span class="module-icon">
+              <svg viewBox="0 0 64 64" aria-hidden="true">
+                <circle cx="24" cy="23" r="9" />
+                <path d="M10 51c3-12 25-12 28 0" />
+                <path d="M42 21h12" />
+                <path d="M42 31h9" />
+                <path d="M42 41h12" />
+              </svg>
+            </span>
+            <span class="module-label">
+              <strong>Usuarios</strong>
+              <small>Roles y permisos</small>
+            </span>
+          </button>
+        </nav>
+      </aside>
+
+      <section class="main-stage">
+        <div class="stage-head">
+          <div>
+            <p class="eyebrow">Chic & Co</p>
+            <h2>Panel operativo</h2>
+          </div>
+          <div class="shift-pill">
+            <span class="status-dot"></span>
+            Turno abierto
+          </div>
+        </div>
+
+        <section class="module-overview" aria-label="Resumen operativo">
+          <section class="info-block active-module-card" aria-labelledby="moduleTitle">
+            <div>
+              <p class="eyebrow">Modulo activo</p>
+              <h2 id="moduleTitle">Clientes</h2>
+            </div>
+            <p id="moduleDescription"></p>
+            <div class="metric-row" id="moduleMetrics"></div>
+            <div class="action-row" id="moduleActions"></div>
+          </section>
+
+          <section class="info-block" aria-labelledby="activeTitle">
+            <div class="panel-title">
+              <h2 id="activeTitle">Procedimientos en curso</h2>
+              <span id="activeCount">0</span>
+            </div>
+            <div class="compact-list" id="activeProcedureList"></div>
+          </section>
+
+          <section class="info-block" aria-labelledby="alertsTitle">
+            <div class="panel-title">
+              <h2 id="alertsTitle">Alertas de inventario</h2>
+              <span id="alertCount">0</span>
+            </div>
+            <div class="compact-list" id="requestList"></div>
+          </section>
+        </section>
+
+        <section class="operations-panel" aria-labelledby="viewTitle">
+          <div class="operations-head">
+            <div>
+              <p class="eyebrow" id="viewEyebrow">Gestion</p>
+              <h2 id="viewTitle">Clientes</h2>
+              <p id="viewSubtitle"></p>
+            </div>
+            <div class="toolbar">
+              <label class="search-box" for="searchInput">
+                <span>Buscar</span>
+                <input id="searchInput" type="search" placeholder="Nombre, producto, estado..." />
+              </label>
+              <button class="secondary-action" type="button" id="resetDataButton">Reiniciar demo</button>
+            </div>
+          </div>
+
+          <div class="view-content" id="viewContent"></div>
+        </section>
+      </section>
+    </main>
+
+    <div class="modal-backdrop" id="inventoryReasonModal" aria-hidden="true">
+      <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="reasonModalTitle">
+        <form class="data-form" id="inventoryReasonForm" autocomplete="off">
+          <div class="modal-head">
+            <div>
+              <p class="eyebrow">Salida de inventario</p>
+              <h2 id="reasonModalTitle">Motivo</h2>
+            </div>
+            <button class="modal-close" type="button" id="reasonCancelButton" aria-label="Cerrar">x</button>
+          </div>
+
+          <p class="modal-product" id="reasonProductName"></p>
+
+          <label class="field full">
+            <span>Motivo</span>
+            <textarea
+              id="reasonText"
+              name="reason"
+              placeholder="Escriba el motivo de uso del producto..."
+              required
+            ></textarea>
+          </label>
+
+          <div class="modal-foot">
+            <span id="reasonWordCount">0/100 palabras</span>
+            <div class="inline-actions">
+              <button class="secondary-action" type="button" id="reasonSecondaryCancelButton">Cancelar</button>
+              <button class="primary-action" type="submit">Validar salida</button>
+            </div>
+          </div>
+        </form>
+      </section>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
