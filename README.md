@@ -32,8 +32,8 @@ http://127.0.0.1:4173
 
 ## Deploy online
 
-El repositorio incluye `render.yaml` para desplegar la app completa como servicio Node en Render. El backend sirve la web y la API desde el mismo dominio.
+El repositorio incluye `render.yaml` para desplegar la app completa como servicio Node en Render. El backend sirve la web y la API desde el mismo dominio, y en Render guarda los datos en Postgres usando `DATABASE_URL`.
 
 ## Nota importante
 
-La version estatica publicada en GitHub Pages usa `localStorage` como base de datos demo. Cuando se abre desde el backend Node, la app guarda los datos en `backend/data/chic-co-db.json` y valida el login desde la API.
+La version estatica publicada en GitHub Pages usa `localStorage` como base de datos demo. Cuando se abre desde el backend Node local, la app guarda los datos en `backend/data/chic-co-db.json`; cuando se despliega en Render, guarda los datos en Postgres y valida el login desde la API.
