@@ -10,7 +10,10 @@ const dataDir = path.join(__dirname, "data");
 const dbPath = path.join(dataDir, "chic-co-db.json");
 const port = Number(process.env.PORT || 4173);
 const host = process.env.HOST || "127.0.0.1";
+const databaseUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL || "";
 const maxBodyBytes = 10 * 1024 * 1024;
+let pgPool = null;
+let pgReady = false;
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -71,7 +74,30 @@ async function readJsonBody(req) {
   return JSON.parse(rawBody);
 }
 
-async function readState() {
+async function getPostgresPool() {
+  if (!pgPool) {
+    const { Pool } = require("pg");
+    pgPool = new Pool({
+      connectionString: databaseUrl,
+      max: 3
+    });
+  }
+
+  if (!pgReady) {
+    await pgPool.query(`
+      CREATE TABLE IF NOT EXISTS app_state (
+        id integer PRIMARY KEY,
+        data jsonb NOT NULL,
+        updated_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    pgReady = true;
+  }
+
+  return pgPool;
+}
+
+async function readJsonState() {
   try {
     const rawState = await fs.readFile(dbPath, "utf8");
     return JSON.parse(rawState);
@@ -81,11 +107,35 @@ async function readState() {
   }
 }
 
-async function writeState(nextState) {
+async function writeJsonState(nextState) {
   await fs.mkdir(dataDir, { recursive: true });
   const tempPath = `${dbPath}.${Date.now()}.tmp`;
   await fs.writeFile(tempPath, JSON.stringify(nextState, null, 2), "utf8");
   await fs.rename(tempPath, dbPath);
+}
+
+async function readState() {
+  if (!databaseUrl) return readJsonState();
+
+  const pool = await getPostgresPool();
+  const result = await pool.query("SELECT data FROM app_state WHERE id = $1", [1]);
+  return result.rows[0]?.data || null;
+}
+
+async function writeState(nextState) {
+  if (!databaseUrl) {
+    await writeJsonState(nextState);
+    return;
+  }
+
+  const pool = await getPostgresPool();
+  await pool.query(
+    `INSERT INTO app_state (id, data, updated_at)
+     VALUES ($1, $2, now())
+     ON CONFLICT (id)
+     DO UPDATE SET data = EXCLUDED.data, updated_at = now()`,
+    [1, nextState]
+  );
 }
 
 function publicUser(user) {
@@ -127,7 +177,7 @@ async function handleApi(req, res, pathname) {
   }
 
   if (pathname === "/api/health" && req.method === "GET") {
-    sendJson(res, 200, { ok: true, app: "Chic & Co Backend" });
+    sendJson(res, 200, { ok: true, app: "Chic & Co Backend", storage: databaseUrl ? "postgres" : "json" });
     return;
   }
 
