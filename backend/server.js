@@ -15,6 +15,29 @@ const maxBodyBytes = 10 * 1024 * 1024;
 let pgPool = null;
 let pgReady = false;
 
+const systemUserAuth = {
+  "USR-000": {
+    email: "gaboarcegazel@outlook.com",
+    passwordHash: "8761fab13ae64eed33cad324c8bf7023caa5cf9ec63c858fd4e421e7650d51a5"
+  },
+  "USR-001": {
+    email: "andres@chicco.local",
+    passwordHash: "6117904c28115e4b6b78c601687c966a640888ba4f019e49459f0b97bce17a60"
+  },
+  "USR-002": {
+    email: "gabriela@chicco.local",
+    passwordHash: "9b71058a47f7c7fd26251e3855bbdac834ff19ace919ab5ee9f19a1fd13911e3"
+  },
+  "USR-003": {
+    email: "paola@chicco.local",
+    passwordHash: "dbbe503845a96eb0f5faffb9fc84a89a60f870c8afacacbd32adde1bc2980040"
+  },
+  "USR-004": {
+    email: "camila@chicco.local",
+    passwordHash: "96fb023c77fde9e57d5b11a8285e19bec7f0093459223894a0ead9d77029534f"
+  }
+};
+
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -50,6 +73,17 @@ function sendError(res, statusCode, message) {
 
 function hashPassword(password) {
   return crypto.createHash("sha256").update(String(password)).digest("hex");
+}
+
+function applySystemUserAuth(state) {
+  if (!state || !Array.isArray(state.users)) return state;
+  return {
+    ...state,
+    users: state.users.map((user) => {
+      const auth = systemUserAuth[user.id];
+      return auth ? { ...user, email: auth.email, passwordHash: auth.passwordHash } : user;
+    })
+  };
 }
 
 async function readBody(req) {
@@ -100,7 +134,7 @@ async function getPostgresPool() {
 async function readJsonState() {
   try {
     const rawState = await fs.readFile(dbPath, "utf8");
-    return JSON.parse(rawState);
+    return applySystemUserAuth(JSON.parse(rawState));
   } catch (error) {
     if (error.code === "ENOENT") return null;
     throw error;
@@ -110,7 +144,7 @@ async function readJsonState() {
 async function writeJsonState(nextState) {
   await fs.mkdir(dataDir, { recursive: true });
   const tempPath = `${dbPath}.${Date.now()}.tmp`;
-  await fs.writeFile(tempPath, JSON.stringify(nextState, null, 2), "utf8");
+  await fs.writeFile(tempPath, JSON.stringify(applySystemUserAuth(nextState), null, 2), "utf8");
   await fs.rename(tempPath, dbPath);
 }
 
@@ -119,7 +153,7 @@ async function readState() {
 
   const pool = await getPostgresPool();
   const result = await pool.query("SELECT data FROM app_state WHERE id = $1", [1]);
-  return result.rows[0]?.data || null;
+  return applySystemUserAuth(result.rows[0]?.data || null);
 }
 
 async function writeState(nextState) {
@@ -129,12 +163,13 @@ async function writeState(nextState) {
   }
 
   const pool = await getPostgresPool();
+  const storedState = applySystemUserAuth(nextState);
   await pool.query(
     `INSERT INTO app_state (id, data, updated_at)
      VALUES ($1, $2, now())
      ON CONFLICT (id)
      DO UPDATE SET data = EXCLUDED.data, updated_at = now()`,
-    [1, nextState]
+    [1, storedState]
   );
 }
 
