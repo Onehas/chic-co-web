@@ -1,34 +1,31 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="es">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Chic & Co Salon Software</title>
+    <title>Chic & Co | Salon Suite</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
-  <body class="is-login">
-    <section class="login-screen" id="loginScreen" aria-labelledby="loginTitle">
-      <div class="login-panel">
+  <body>
+    <section class="login-screen" id="loginScreen" aria-label="Inicio de sesion">
+      <div class="login-card">
         <div class="login-brand">
-          <img src="assets/chic-co-logo-black.png" alt="Chic & Co" />
-          <div>
-            <p class="eyebrow">Chic & Co</p>
-            <h1 id="loginTitle">Acceso interno</h1>
+          <div class="login-logo-frame">
+            <img src="assets/chic-co-logo.svg" alt="Chic & Co" />
           </div>
+          <span>Salon Suite</span>
+          <h1>Chic & Co</h1>
         </div>
-
-        <form class="login-form" id="loginForm" autocomplete="off">
+        <form class="login-form" id="loginForm" autocomplete="on">
           <label class="field">
             <span>Email</span>
-            <input id="loginEmail" name="email" type="email" placeholder="correo@dominio.com" required />
+            <input id="loginEmail" name="email" type="email" autocomplete="username" required />
           </label>
-
           <label class="field">
             <span>Contrasena</span>
-            <input id="loginPassword" name="password" type="password" required />
+            <input id="loginPassword" name="password" type="password" autocomplete="current-password" required />
           </label>
-
-          <p class="login-error" id="loginError" role="alert" aria-live="polite"></p>
+          <p class="login-error" id="loginError" role="alert"></p>
           <button class="primary-action" type="submit">Entrar</button>
         </form>
       </div>
@@ -36,232 +33,118 @@
 
     <header class="topbar">
       <div class="brand">
-        <div class="brand-mark">C&C</div>
+        <div class="brand-logo-frame">
+          <img src="assets/chic-co-logo.svg" alt="Chic & Co" />
+        </div>
         <div class="brand-copy">
           <strong>Chic & Co</strong>
           <span>Salon Suite</span>
         </div>
       </div>
 
-      <nav class="main-nav" aria-label="Navegacion principal">
-        <button class="nav-link has-menu" type="button" data-menu="sucursal">
-          Sucursal
-          <span class="chevron">v</span>
-        </button>
+      <nav class="main-nav" aria-label="Menu superior">
+        <button class="nav-menu-button" type="button" data-menu="usuario">Usuario v</button>
+        <button class="nav-menu-button" type="button" data-menu="sucursal">Sucursal v</button>
+        <button class="nav-menu-button" type="button" data-menu="ayuda">Ayuda v</button>
       </nav>
 
       <div class="top-actions">
-        <button class="icon-button" type="button" data-quick="sync" aria-label="Sincronizar">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M20 6v5h-5" />
-            <path d="M4 18v-5h5" />
-            <path d="M6.5 9A6 6 0 0 1 17 6.6L20 11" />
-            <path d="M17.5 15A6 6 0 0 1 7 17.4L4 13" />
-          </svg>
-        </button>
-        <button class="icon-button" type="button" data-quick="transfer" aria-label="Cambiar turno">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M7 7h13" />
-            <path d="m16 3 4 4-4 4" />
-            <path d="M17 17H4" />
-            <path d="m8 13-4 4 4 4" />
-          </svg>
-        </button>
-        <button class="user-menu has-menu" type="button" data-menu="usuario">
-          <span id="currentUserName">Andres</span>
-          <span class="chevron">v</span>
-        </button>
+        <button class="secondary-action" type="button" id="resetDataButton">Reiniciar demo</button>
       </div>
     </header>
 
-    <div class="dropdown-layer" id="dropdownLayer" aria-live="polite"></div>
-
     <main class="app-shell">
-      <aside class="sidebar" aria-label="Modulos del salon">
-        <section class="sidebar-brand">
-          <img src="assets/chic-co-logo-black.png" alt="Chic & Co" />
-          <div>
-            <p class="eyebrow">Software interno</p>
-            <h1>Administracion del salon</h1>
-          </div>
+      <aside class="sidebar" aria-label="Modulos">
+        <section class="user-card">
+          <span>Usuario activo</span>
+          <strong id="currentUserName">Gabriel Arce</strong>
+          <small>Sistema Chic & Co</small>
         </section>
 
-        <nav class="module-grid" aria-label="Opciones principales">
+        <section class="module-grid" id="moduleGrid">
           <button class="module-button is-active" type="button" data-module="clientes">
-            <span class="module-icon">
-              <svg viewBox="0 0 64 64" aria-hidden="true">
-                <circle cx="24" cy="24" r="10" />
-                <path d="M9 52c3-13 27-13 30 0" />
-                <circle cx="43" cy="27" r="8" />
-                <path d="M37 52c2-8 16-8 18 0" />
-              </svg>
+            <span class="module-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" role="img"><path d="M16 11a4 4 0 1 0-3.6-5.7A5 5 0 0 1 16 11Zm-7 1a5 5 0 1 0 0-10 5 5 0 0 0 0 10Zm0 2c-3.9 0-7 2-7 4.4V21h14v-2.6C16 16 12.9 14 9 14Zm7.5-.5c-.7 0-1.4.1-2 .3 1.8 1 3 2.6 3 4.6V21H22v-2.4c0-2.7-2.5-5.1-5.5-5.1Z" /></svg>
             </span>
-            <span class="module-label">
-              <strong>Clientes</strong>
-              <small>Historial y contacto</small>
-            </span>
+            <span>Clientes</span>
           </button>
-
           <button class="module-button" type="button" data-module="inventario">
-            <span class="module-icon">
-              <svg viewBox="0 0 64 64" aria-hidden="true">
-                <path d="M14 20 32 10l18 10v25L32 55 14 45z" />
-                <path d="M14 20 32 30l18-10" />
-                <path d="M32 30v25" />
-                <path d="M23 15l18 10" />
-              </svg>
+            <span class="module-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" role="img"><path d="M21 7.5 12 2 3 7.5v9L12 22l9-5.5v-9ZM12 4.3l5.9 3.6L12 11.4 6.1 7.9 12 4.3ZM5 9.7l6 3.6v5.9l-6-3.7V9.7Zm8 9.5v-5.9l6-3.6v5.8l-6 3.7Z" /></svg>
             </span>
-            <span class="module-label">
-              <strong>Inventario</strong>
-              <small>Productos y stock</small>
-            </span>
+            <span>Inventario</span>
           </button>
-
           <button class="module-button" type="button" data-module="procedimientos">
-            <span class="module-icon">
-              <svg viewBox="0 0 64 64" aria-hidden="true">
-                <path d="M18 46c9-20 24-20 33-30" />
-                <path d="M13 52c12-3 20-12 24-25" />
-                <path d="M43 15l7-3 2 7" />
-                <path d="M18 19h12" />
-                <path d="M16 28h9" />
-                <path d="M40 45h10" />
-              </svg>
+            <span class="module-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" role="img"><path d="M18.7 3.3a1 1 0 0 0-1.4 0l-3.8 3.8 3.4 3.4 3.8-3.8a1 1 0 0 0 0-1.4l-2-2ZM12.1 8.5 4 16.6V20h3.4l8.1-8.1-3.4-3.4ZM7 3h2v4H7V3Zm8 14h2v4h-2v-4ZM3 7h4v2H3V7Zm14 8h4v2h-4v-2Z" /></svg>
             </span>
-            <span class="module-label">
-              <strong>Procedimientos</strong>
-              <small>Servicios esteticos</small>
-            </span>
+            <span>Procedimientos</span>
           </button>
-
           <button class="module-button" type="button" data-module="enCurso">
-            <span class="module-icon">
-              <svg viewBox="0 0 64 64" aria-hidden="true">
-                <path d="M18 16h28v36H18z" />
-                <path d="M24 12h16v8H24z" />
-                <path d="M25 31h15" />
-                <path d="M25 39h10" />
-                <path d="M43 38l5 5 8-11" />
-              </svg>
+            <span class="module-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" role="img"><path d="M6 3h12v4h3v14H3V7h3V3Zm2 4h8V5H8v2Zm-3 2v10h14V9H5Zm3 2h8v2H8v-2Zm0 4h5v2H8v-2Z" /></svg>
             </span>
-            <span class="module-label">
-              <strong>En curso</strong>
-              <small>Sesiones activas</small>
-            </span>
+            <span>En curso</span>
           </button>
-
           <button class="module-button" type="button" data-module="planes">
-            <span class="module-icon">
-              <svg viewBox="0 0 64 64" aria-hidden="true">
-                <path d="M16 16h32v38H16z" />
-                <path d="M16 26h32" />
-                <path d="M24 10v12" />
-                <path d="M40 10v12" />
-                <path d="M23 36h6" />
-                <path d="M35 36h6" />
-                <path d="M23 45h6" />
-                <path d="M35 45h6" />
-              </svg>
+            <span class="module-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" role="img"><path d="M7 2h2v3h6V2h2v3h3v17H4V5h3V2Zm11 8H6v10h12V10ZM6 7v1h12V7H6Zm2 5h3v3H8v-3Zm5 0h3v3h-3v-3Zm-5 5h3v2H8v-2Z" /></svg>
             </span>
-            <span class="module-label">
-              <strong>Planes</strong>
-              <small>Larga duracion</small>
-            </span>
+            <span>Planes</span>
           </button>
-
           <button class="module-button" type="button" data-module="citas">
-            <span class="module-icon">
-              <svg viewBox="0 0 64 64" aria-hidden="true">
-                <path d="M16 18h32v34H16z" />
-                <path d="M16 27h32" />
-                <path d="M24 12v12" />
-                <path d="M40 12v12" />
-                <path d="M24 39l6-6v15" />
-                <path d="M36 34c8 0 8 12 0 12" />
-                <path d="M36 46h8" />
-              </svg>
+            <span class="module-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" role="img"><path d="M7 2h2v2h6V2h2v2h4v18H3V4h4V2Zm12 8H5v10h14V10ZM5 6v2h14V6H5Zm3 7h3v3H8v-3Zm5 0h3v3h-3v-3Z" /></svg>
             </span>
-            <span class="module-label">
-              <strong>Citas</strong>
-              <small>Agenda del salon</small>
-            </span>
+            <span>Citas</span>
           </button>
-
           <button class="module-button" type="button" data-module="facturacion">
-            <span class="module-icon">
-              <svg viewBox="0 0 64 64" aria-hidden="true">
-                <path d="M18 10h28v44H18z" />
-                <path d="M24 21h16" />
-                <path d="M24 30h16" />
-                <path d="M24 39h8" />
-                <path d="M38 46c0-5 8-5 8 0s-8 3-8 8" />
-              </svg>
+            <span class="module-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" role="img"><path d="M6 2h12v20l-3-2-3 2-3-2-3 2V2Zm2 3v13.3l1-.7 3 2 3-2 1 .7V5H8Zm2 3h6v2h-6V8Zm0 4h6v2h-6v-2Zm0 4h4v2h-4v-2Z" /></svg>
             </span>
-            <span class="module-label">
-              <strong>Facturacion</strong>
-              <small>Clientes, IVA y pagos</small>
-            </span>
+            <span>Facturacion</span>
           </button>
-
           <button class="module-button" type="button" data-module="usuarios">
-            <span class="module-icon">
-              <svg viewBox="0 0 64 64" aria-hidden="true">
-                <circle cx="24" cy="23" r="9" />
-                <path d="M10 51c3-12 25-12 28 0" />
-                <path d="M42 21h12" />
-                <path d="M42 31h9" />
-                <path d="M42 41h12" />
-              </svg>
+            <span class="module-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" role="img"><path d="M12 2a5 5 0 0 0-5 5v2H5v13h14V9h-2V7a5 5 0 0 0-5-5Zm-3 7V7a3 3 0 0 1 6 0v2H9Zm-2 2h10v9H7v-9Zm5 2a2 2 0 0 0-1 3.7V18h2v-1.3A2 2 0 0 0 12 13Z" /></svg>
             </span>
-            <span class="module-label">
-              <strong>Usuarios</strong>
-              <small>Roles y permisos</small>
-            </span>
+            <span>Usuarios</span>
           </button>
-        </nav>
+        </section>
       </aside>
 
-      <section class="main-stage">
-        <div class="stage-head">
+      <section class="stage">
+        <section class="stage-head">
           <div>
-            <p class="eyebrow">Chic & Co</p>
-            <h2>Panel operativo</h2>
-          </div>
-          <div class="shift-pill">
-            <span class="status-dot"></span>
-            Turno abierto
-          </div>
-        </div>
-
-        <section class="module-overview" aria-label="Resumen operativo">
-          <section class="info-block active-module-card" aria-labelledby="moduleTitle">
-            <div>
-              <p class="eyebrow">Modulo activo</p>
-              <h2 id="moduleTitle">Clientes</h2>
-            </div>
+            <p class="eyebrow">Panel operativo</p>
+            <h1 id="moduleTitle">Clientes</h1>
             <p id="moduleDescription"></p>
-            <div class="metric-row" id="moduleMetrics"></div>
-            <div class="action-row" id="moduleActions"></div>
-          </section>
+          </div>
+          <div class="metric-row" id="moduleMetrics"></div>
+        </section>
 
-          <section class="info-block" aria-labelledby="activeTitle">
+        <section class="module-overview">
+          <article class="active-module-card">
+            <p class="eyebrow">Acciones rapidas</p>
+            <div class="action-row" id="moduleActions"></div>
+          </article>
+          <article class="side-card">
             <div class="panel-title">
-              <h2 id="activeTitle">Procedimientos en curso</h2>
+              <h2>En curso</h2>
               <span id="activeCount">0</span>
             </div>
             <div class="compact-list" id="activeProcedureList"></div>
-          </section>
-
-          <section class="info-block" aria-labelledby="alertsTitle">
+          </article>
+          <article class="side-card">
             <div class="panel-title">
-              <h2 id="alertsTitle">Alertas de inventario</h2>
+              <h2>Alertas</h2>
               <span id="alertCount">0</span>
             </div>
             <div class="compact-list" id="requestList"></div>
-          </section>
+          </article>
         </section>
 
-        <section class="operations-panel" aria-labelledby="viewTitle">
+        <section class="operations-panel">
           <div class="operations-head">
             <div>
               <p class="eyebrow" id="viewEyebrow">Gestion</p>
@@ -269,28 +152,30 @@
               <p id="viewSubtitle"></p>
             </div>
             <div class="toolbar">
-              <label class="search-box" for="searchInput">
+              <label class="search-box">
                 <span>Buscar</span>
-                <input id="searchInput" type="search" placeholder="Nombre, producto, estado..." />
+                <input id="searchInput" type="search" placeholder="Nombre, estado, categoria..." />
               </label>
-              <button class="secondary-action" type="button" id="resetDataButton">Reiniciar demo</button>
             </div>
           </div>
-
           <div class="view-content" id="viewContent"></div>
         </section>
       </section>
     </main>
 
-    <div class="modal-backdrop" id="inventoryReasonModal" aria-hidden="true">
-      <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="reasonModalTitle">
-        <form class="data-form" id="inventoryReasonForm" autocomplete="off">
+    <div class="dropdown-layer" id="dropdownLayer" aria-hidden="true">
+      <div class="dropdown-panel" id="dropdownPanel"></div>
+    </div>
+
+    <div class="modal-backdrop" id="reasonModal" aria-hidden="true">
+      <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="reasonTitle">
+        <form id="inventoryReasonForm" autocomplete="off">
           <div class="modal-head">
             <div>
-              <p class="eyebrow">Salida de inventario</p>
-              <h2 id="reasonModalTitle">Motivo</h2>
+              <p class="eyebrow">Validacion de inventario</p>
+              <h2 id="reasonTitle">Motivo de salida</h2>
             </div>
-            <button class="modal-close" type="button" id="reasonCancelButton" aria-label="Cerrar">x</button>
+            <button class="mini-button" type="button" id="reasonCancelButton">Cerrar</button>
           </div>
 
           <p class="modal-product" id="reasonProductName"></p>
@@ -320,5 +205,6 @@
 
     <script src="app.js"></script>
     <script src="backend-client.js"></script>
+    <script src="enhancements.js"></script>
   </body>
 </html>
