@@ -441,6 +441,20 @@
     <script src="enhancements.js"></script>
     <script>
       (() => {
+        if (window.__chicLogoutMenuGuard || typeof dropdownOptions !== "function") return;
+        window.__chicLogoutMenuGuard = true;
+        const originalDropdownOptions = dropdownOptions;
+        dropdownOptions = function (menuName) {
+          const options = originalDropdownOptions(menuName) || [];
+          if (menuName !== "usuario" || options.some((item) => item.logout)) {
+            return options;
+          }
+          return [...options, { label: "Cerrar sesion", logout: true }];
+        };
+      })();
+    </script>
+    <script>
+      (() => {
         if (window.__chicLoginOnlineGuard) return;
         window.__chicLoginOnlineGuard = true;
 
