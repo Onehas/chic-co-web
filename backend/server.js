@@ -273,13 +273,21 @@ async function serveStatic(req, res, pathname) {
     const extension = path.extname(filePath).toLowerCase();
     const contentType = mimeTypes[extension] || "application/octet-stream";
     const fileBuffer = await fs.readFile(filePath);
+    let responseBuffer = fileBuffer;
+
+    if (path.basename(filePath) === "index.html") {
+      const html = fileBuffer.toString("utf8");
+      if (!html.includes("agenda-upgrade.js")) {
+        responseBuffer = Buffer.from(html.replace("</body>", '    <script src="agenda-upgrade.js"></script>\n  </body>'), "utf8");
+      }
+    }
 
     setBaseHeaders(res);
     res.writeHead(200, {
       "Content-Type": contentType,
-      "Content-Length": fileBuffer.length
+      "Content-Length": responseBuffer.length
     });
-    res.end(fileBuffer);
+    res.end(responseBuffer);
   } catch (error) {
     if (error.code === "ENOENT") {
       sendError(res, 404, "Archivo no encontrado.");
