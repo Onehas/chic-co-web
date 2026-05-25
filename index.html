@@ -437,8 +437,9 @@
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
     <script src="app.js"></script>
-    <script src="backend-client.js"></script>
+    <script src="security-upgrade.js"></script>
     <script src="enhancements.js"></script>
+    <script src="agenda-upgrade.js"></script>
     <script>
       (() => {
         if (window.__chicLogoutMenuGuard || typeof dropdownOptions !== "function") return;
@@ -451,70 +452,6 @@
           }
           return [...options, { label: "Cerrar sesion", logout: true }];
         };
-      })();
-    </script>
-    <script>
-      (() => {
-        if (window.__chicLoginOnlineGuard) return;
-        window.__chicLoginOnlineGuard = true;
-
-        document.querySelectorAll('img[src$="chic-co-logo.svg"]').forEach((image) => {
-          image.src = "assets/chic-co-logo-black.png";
-        });
-
-        async function requestJson(path, options = {}) {
-          const response = await fetch(path, {
-            ...options,
-            headers: {
-              ...(options.headers || {}),
-              "Content-Type": "application/json"
-            }
-          });
-          const payload = await response.json().catch(() => ({}));
-          if (!response.ok) {
-            throw new Error(payload.message || "Error del backend");
-          }
-          return payload;
-        }
-
-        async function refreshStateFromBackend() {
-          const response = await requestJson("api/state", { method: "GET" });
-          if (!response.state) return;
-          state = typeof normalizeStateSnapshot === "function" ? normalizeStateSnapshot(response.state) : response.state;
-          localStorage.setItem(storageKey, JSON.stringify(state));
-        }
-
-        document.addEventListener(
-          "submit",
-          async (event) => {
-            if (event.target !== elements.loginForm) return;
-            event.preventDefault();
-            event.stopImmediatePropagation();
-
-            const email = elements.loginEmail.value.trim();
-            const password = elements.loginPassword.value;
-            elements.loginError.textContent = "";
-
-            try {
-              const login = await requestJson("api/login", {
-                method: "POST",
-                body: JSON.stringify({ email, password })
-              });
-
-              await refreshStateFromBackend();
-              if (login.user && !state.users.some((user) => user.id === login.userId)) {
-                state.users.push(login.user);
-              }
-              saveSessionUser(login.userId);
-              elements.loginForm.reset();
-              showApp(login.userId);
-              showToast(`Bienvenido, ${login.user?.name || currentUser()?.name || "Usuario"}`);
-            } catch (error) {
-              elements.loginError.textContent = "Email o contrasena incorrectos.";
-            }
-          },
-          true
-        );
       })();
     </script>
   </body>
