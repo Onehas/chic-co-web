@@ -22,7 +22,7 @@ const systemUserAuth = {
   },
   "USR-001": {
     email: "andresguevarag1@gmail.com",
-    passwordHash: "6ab0130c6093517a1088727b42b3ee9973374af324"
+    passwordHash: "6ab0130c6093517a1088727b42c89ce7a3cb31387bcc4e42b3ee9973374af324"
   },
   "USR-002": {
     email: "gabriela@chicco.local",
