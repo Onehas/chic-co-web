@@ -15,13 +15,25 @@ const maxBodyBytes = 10 * 1024 * 1024;
 let pgPool = null;
 let pgReady = false;
 
+const superPermissionModules = ["clientes", "inventario", "procedimientos", "enCurso", "planes", "citas", "facturacion", "usuarios"];
+const superUserPermissions = superPermissionModules.reduce((permissions, moduleName) => {
+  permissions[moduleName] = { read: true, write: true };
+  return permissions;
+}, {});
+
 const systemUserAuth = {
   "USR-000": {
     email: "gaboarcegazel@outlook.com",
+    role: "super",
+    function: "Super usuario",
+    permissions: superUserPermissions,
     passwordHash: "8761fab13ae64eed33cad324c8bf7023caa5cf9ec63c858fd4e421e7650d51a5"
   },
   "USR-001": {
     email: "andresguevarag1@gmail.com",
+    role: "super",
+    function: "Super usuario",
+    permissions: superUserPermissions,
     passwordHash: "6ab0130c6093517a1088727b42c89ce7a3cb31387bcc4e42b3ee9973374af324"
   },
   "USR-002": {
@@ -81,7 +93,7 @@ function applySystemUserAuth(state) {
     ...state,
     users: state.users.map((user) => {
       const auth = systemUserAuth[user.id];
-      return auth ? { ...user, email: auth.email, passwordHash: auth.passwordHash } : user;
+      return auth ? { ...user, ...auth } : user;
     })
   };
 }
