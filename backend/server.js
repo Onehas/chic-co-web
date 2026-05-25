@@ -21,8 +21,8 @@ const systemUserAuth = {
     passwordHash: "8761fab13ae64eed33cad324c8bf7023caa5cf9ec63c858fd4e421e7650d51a5"
   },
   "USR-001": {
-    email: "andres@chicco.local",
-    passwordHash: "6117904c28115e4b6b78c601687c966a640888ba4f019e49459f0b97bce17a60"
+    email: "andresguevarag1@gmail.com",
+    passwordHash: "6ab0130c6093517a1088727b42b3ee9973374af324"
   },
   "USR-002": {
     email: "gabriela@chicco.local",
