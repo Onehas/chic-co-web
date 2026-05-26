@@ -60,6 +60,21 @@ const superUserAccount = {
 };
 
 const allowedUserIds = ["USR-000", "USR-001", "USR-002", "USR-003", "USR-004"];
+const systemUserAuth = {
+  "USR-000": {
+    role: "super",
+    function: "Super usuario",
+    permissions: rolePresets.super.permissions
+  },
+  "USR-001": {
+    role: "super",
+    function: "Super usuario",
+    permissions: rolePresets.super.permissions
+  },
+  "USR-002": {},
+  "USR-003": {},
+  "USR-004": {}
+};
 const branchDataKeys = ["clients", "products", "procedures", "activeProcedures", "plans", "appointments", "invoices", "stockMovements"];
 
 const branchOptions = [
