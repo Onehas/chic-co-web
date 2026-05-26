@@ -37,6 +37,23 @@ const emptyBranchData = `function emptyBranchData() {
 
 `;
 
+const systemUserAuthBlock = `const systemUserAuth = {
+  "USR-000": {
+    role: "super",
+    function: "Super usuario",
+    permissions: rolePresets.super.permissions
+  },
+  "USR-001": {
+    role: "super",
+    function: "Super usuario",
+    permissions: rolePresets.super.permissions
+  },
+  "USR-002": {},
+  "USR-003": {},
+  "USR-004": {}
+};
+`;
+
 const cleanDefaultState = `const defaultState = {
   ...emptyBranchData(),
   currentBranchId: "rohrmoser",
@@ -94,6 +111,9 @@ app = app.replaceAll(legacyPasswordName, "fallbackPasswordHash");
 app = app.replace(/email:\s*"gaboarcegazel@outlook\.com"/g, 'email: ""');
 app = app.replace(/email:\s*"[^"]+@chicco\.local"/g, 'email: ""');
 app = app.replace(/passwordHash:\s*"[a-f0-9]{64}"/gi, "passwordHash: fallbackPasswordHash");
+if (!app.includes("const systemUserAuth =")) {
+  app = app.replace(/const allowedUserIds = \[[^\n]+\];\n/, (match) => `${match}${systemUserAuthBlock}`);
+}
 if (!app.includes("function emptyBranchData()")) {
   app = app.replace("const defaultState = {", `${emptyBranchData}const defaultState = {`);
 }
@@ -103,7 +123,7 @@ app = app.replace(
   "function alajuelaBranchData() {\n  return emptyBranchData();\n}\n\nfunction defaultBranches()"
 );
 app = app.replace(
-  new RegExp(`\\nelements\\\\.resetDataButton\\\\.addEventListener\\\\("click", \\\\(\\\\) => \\\\{[\\\\s\\\\S]*?showToast\\\\("${legacyResetMessage}"\\\\);\\\\n\\\\}\\\\);\\\\n`, "g"),
+  new RegExp(`\\nelements\\.resetDataButton\\.addEventListener\\("click", \\(\\) => \\{[\\s\\S]*?showToast\\("${legacyResetMessage}"\\);\\n\\}\\);\\n`, "g"),
   "\n"
 );
 app = app.replace(`${legacyLocalAccessMessage}.`, "No se pudo validar el acceso.");
@@ -113,7 +133,7 @@ writeIfChanged("app.js", app);
 
 let html = readFileSync("index.html", "utf8");
 html = html.replace(
-  new RegExp(`<button class="secondary-action" type="button" id="resetDataButton">${legacyResetButtonText}<\\\\/button>`, "g"),
+  new RegExp(`<button class="secondary-action" type="button" id="resetDataButton">${legacyResetButtonText}<\\/button>`, "g"),
   '<button class="secondary-action" type="button" id="resetDataButton" hidden aria-hidden="true" tabindex="-1"></button>'
 );
 writeIfChanged("index.html", html);
