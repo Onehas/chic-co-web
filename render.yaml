@@ -9,7 +9,7 @@ services:
     name: chic-co-web
     runtime: node
     plan: free
-    buildCommand: npm install
+    buildCommand: node scripts/clean-production.mjs && npm install
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:
