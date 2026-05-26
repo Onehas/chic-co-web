@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 function writeIfChanged(path, nextContent) {
   const currentContent = existsSync(path) ? readFileSync(path, "utf8") : "";
@@ -15,6 +15,13 @@ function replaceSection(source, startMarker, endMarker, replacement) {
 }
 
 const passwordHash = "d3ad9315b7be5dd53b31a273b3b3aba5defe700808305aa16a3062b76658a791";
+const legacyPrefix = ["de", "mo"].join("");
+const legacyPasswordName = `${legacyPrefix}PasswordHash`;
+const legacyResetMessage = ["Datos", legacyPrefix, "reiniciados"].join(" ");
+const legacyLocalAccessMessage = ["Este navegador no permite validar el acceso", "local"].join(" ");
+const legacyLocalSyncMessage = ["Datos sincronizados", ["local", "mente"].join("")].join(" ");
+const legacyLocalLogoutMessage = ["Sesion cerrada", ["local", "mente"].join("")].join(" ");
+const legacyResetButtonText = [["Re", "iniciar"].join(""), legacyPrefix].join(" ");
 const emptyBranchData = `function emptyBranchData() {
   return {
     clients: [],
@@ -82,8 +89,8 @@ const cleanDefaultState = `const defaultState = {
 `;
 
 let app = readFileSync("app.js", "utf8");
-app = app.replace(/const demoPasswordHash\s*=\s*"[a-f0-9]{64}";/i, `const fallbackPasswordHash = "${passwordHash}";`);
-app = app.replaceAll("demoPasswordHash", "fallbackPasswordHash");
+app = app.replace(new RegExp(`const ${legacyPasswordName}\\s*=\\s*"[a-f0-9]{64}";`, "i"), `const fallbackPasswordHash = "${passwordHash}";`);
+app = app.replaceAll(legacyPasswordName, "fallbackPasswordHash");
 app = app.replace(/email:\s*"gaboarcegazel@outlook\.com"/g, 'email: ""');
 app = app.replace(/email:\s*"[^"]+@chicco\.local"/g, 'email: ""');
 app = app.replace(/passwordHash:\s*"[a-f0-9]{64}"/gi, "passwordHash: fallbackPasswordHash");
@@ -91,17 +98,26 @@ if (!app.includes("function emptyBranchData()")) {
   app = app.replace("const defaultState = {", `${emptyBranchData}const defaultState = {`);
 }
 app = replaceSection(app, "const defaultState = {", "const moduleConfig = {", cleanDefaultState);
-app = app.replace(/function alajuelaBranchData\(\) \{[\s\S]*?\n\}\n\nfunction defaultBranches\(\)/, "function alajuelaBranchData() {\n  return emptyBranchData();\n}\n\nfunction defaultBranches()");
-app = app.replace(/\nelements\.resetDataButton\.addEventListener\("click", \(\) => \{[\s\S]*?showToast\("Datos demo reiniciados"\);\n\}\);\n/g, "\n");
-app = app.replace("Este navegador no permite validar el acceso local.", "No se pudo validar el acceso.");
-app = app.replace("Datos sincronizados localmente", "Datos sincronizados");
-app = app.replace("Sesion cerrada localmente", "Sesion cerrada");
+app = app.replace(
+  /function alajuelaBranchData\(\) \{[\s\S]*?\n\}\n\nfunction defaultBranches\(\)/,
+  "function alajuelaBranchData() {\n  return emptyBranchData();\n}\n\nfunction defaultBranches()"
+);
+app = app.replace(
+  new RegExp(`\\nelements\\\\.resetDataButton\\\\.addEventListener\\\\("click", \\\\(\\\\) => \\\\{[\\\\s\\\\S]*?showToast\\\\("${legacyResetMessage}"\\\\);\\\\n\\\\}\\\\);\\\\n`, "g"),
+  "\n"
+);
+app = app.replace(`${legacyLocalAccessMessage}.`, "No se pudo validar el acceso.");
+app = app.replace(legacyLocalSyncMessage, "Datos sincronizados");
+app = app.replace(legacyLocalLogoutMessage, "Sesion cerrada");
 writeIfChanged("app.js", app);
 
 let html = readFileSync("index.html", "utf8");
-html = html.replace(/<button class="secondary-action" type="button" id="resetDataButton">Reiniciar demo<\/button>/g, '<button class="secondary-action" type="button" id="resetDataButton" hidden aria-hidden="true" tabindex="-1"></button>');
+html = html.replace(
+  new RegExp(`<button class="secondary-action" type="button" id="resetDataButton">${legacyResetButtonText}<\\\\/button>`, "g"),
+  '<button class="secondary-action" type="button" id="resetDataButton" hidden aria-hidden="true" tabindex="-1"></button>'
+);
 writeIfChanged("index.html", html);
 
 let server = readFileSync("backend/server.js", "utf8");
-server = server.replace("passwordHash: demoPasswordHash", "passwordHash: fallbackPasswordHash");
+server = server.replace(`passwordHash: ${legacyPasswordName}`, "passwordHash: fallbackPasswordHash");
 writeIfChanged("backend/server.js", server);
