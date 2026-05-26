@@ -124,6 +124,36 @@
     }
   };
 
+  async function refreshStateAfterLogin(login) {
+    try {
+      const response = await backendRequest("/state", { cache: "no-store" });
+      if (response.state) {
+        state = normalizeStateSnapshot(response.state);
+        try {
+          localStorage.setItem(storageKey, JSON.stringify(state));
+        } catch (error) {
+          // The live backend is still the source of truth.
+        }
+        return true;
+      }
+    } catch (error) {
+      console.warn("No se pudo refrescar el estado despues del login.", error);
+    }
+
+    if (login?.user && Array.isArray(state?.users)) {
+      const existingIndex = state.users.findIndex((user) => user.id === login.userId);
+      if (existingIndex >= 0) {
+        state.users[existingIndex] = {
+          ...state.users[existingIndex],
+          ...login.user
+        };
+      } else {
+        state.users.push(login.user);
+      }
+    }
+    return false;
+  }
+
   async function completeBackendLogin(email, password) {
     try {
       if (!backendAvailable) {
@@ -142,15 +172,7 @@
         saveBackendAuthToken(login.token);
       }
 
-      const response = await backendRequest("/state", { cache: "no-store" });
-      if (response.state) {
-        state = normalizeStateSnapshot(response.state);
-        try {
-          localStorage.setItem(storageKey, JSON.stringify(state));
-        } catch (error) {
-          // The live backend is still the source of truth.
-        }
-      }
+      await refreshStateAfterLogin(login);
 
       return login;
     } catch (error) {
@@ -180,10 +202,15 @@
       const login = await completeBackendLogin(email, password);
       if (login?.userId) {
         const user = state.users.find((item) => item.id === login.userId) || login.user;
-        saveSessionUser(login.userId);
-        elements.loginForm.reset();
-        showApp(login.userId);
-        showToast(`Bienvenido, ${user?.name || "Usuario"}`);
+        try {
+          saveSessionUser(login.userId);
+          elements.loginForm.reset();
+          showApp(login.userId);
+          showToast(`Bienvenido, ${user?.name || "Usuario"}`);
+        } catch (error) {
+          console.error("Login validado, pero no se pudo cargar el panel.", error);
+          showLogin("Acceso validado, pero no se pudo cargar el panel. Recargue la pagina.");
+        }
         return;
       }
 
