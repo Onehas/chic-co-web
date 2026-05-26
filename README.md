@@ -1,6 +1,6 @@
 # Chic & Co
 
-Aplicacion web estatica para administrar un salon de belleza Chic & Co.
+Aplicacion web para administrar un salon de belleza Chic & Co.
 
 ## Modulos
 
@@ -14,11 +14,9 @@ Aplicacion web estatica para administrar un salon de belleza Chic & Co.
 - Facturacion
 - Sucursales con datos separados
 
-## Uso local
+## Uso
 
-Para usar solo la demo estatica, abre `index.html` directamente en el navegador.
-
-Para usar la app con backend y base de datos local, ejecuta:
+Para levantar la app con backend, ejecuta:
 
 ```bash
 npm start
@@ -36,7 +34,7 @@ El repositorio incluye `render.yaml` para desplegar la app completa como servici
 
 ## Nota importante
 
-La version estatica publicada en GitHub Pages usa `localStorage` como base de datos demo. Cuando se abre desde el backend Node local, la app guarda los datos en `backend/data/chic-co-db.json`; cuando se despliega en Render, guarda los datos en Postgres y valida el login desde la API.
+La version online guarda los datos en Postgres y valida el login desde la API. El almacenamiento del navegador queda solo como apoyo de sesion y recuperacion visual.
 
 ## Seguridad
 
