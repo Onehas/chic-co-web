@@ -6,9 +6,46 @@
     image.src = "assets/chic-co-logo-black.png";
   });
 
-  if (window.location.protocol === "file:" || typeof backendRequest !== "function") return;
+  if (window.location.protocol === "file:" || !window.fetch) return;
 
   const backendTokenKey = "salonSuiteBackendToken";
+  let bridgeBackendAvailable = false;
+  let bridgeSaveTimer = null;
+  let bridgeSaveInFlight = false;
+  let bridgeSaveQueued = false;
+
+  function apiRequestPath(path) {
+    if (typeof apiPath === "function") return apiPath(path);
+    const normalizedPath = String(path || "").startsWith("/") ? path : `/${path || ""}`;
+    return `api${normalizedPath}`;
+  }
+
+  function isBackendAvailable() {
+    try {
+      return Boolean(backendAvailable);
+    } catch (error) {
+      return bridgeBackendAvailable;
+    }
+  }
+
+  function setBackendAvailable(value) {
+    bridgeBackendAvailable = Boolean(value);
+    try {
+      backendAvailable = bridgeBackendAvailable;
+    } catch (error) {
+      // Older app.js builds did not define backendAvailable.
+    }
+  }
+
+  function adoptBackendState(snapshot) {
+    if (!snapshot) return;
+    state = typeof normalizeStateSnapshot === "function" ? normalizeStateSnapshot(snapshot) : snapshot;
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(state));
+    } catch (error) {
+      // The backend remains the source of truth if localStorage is blocked.
+    }
+  }
 
   function backendAuthToken() {
     try {
@@ -45,7 +82,7 @@
       headers.Authorization = `Bearer ${token}`;
     }
 
-    const response = await fetch(apiPath(path), {
+    const response = await fetch(apiRequestPath(path), {
       ...options,
       headers
     });
@@ -69,17 +106,12 @@
 
     try {
       const health = await backendRequest("/health", { cache: "no-store", skipAuth: true });
-      backendAvailable = Boolean(health?.ok);
-      if (!backendAvailable || !backendAuthToken()) return backendAvailable;
+      setBackendAvailable(Boolean(health?.ok));
+      if (!isBackendAvailable() || !backendAuthToken()) return isBackendAvailable();
 
       const response = await backendRequest("/state", { cache: "no-store" });
       if (response.state) {
-        state = normalizeStateSnapshot(response.state);
-        try {
-          localStorage.setItem(storageKey, JSON.stringify(state));
-        } catch (error) {
-          // The backend remains the source of truth if localStorage is blocked.
-        }
+        adoptBackendState(response.state);
       }
       return true;
     } catch (error) {
@@ -89,19 +121,27 @@
         showLogin();
         return true;
       }
-      backendAvailable = false;
+      setBackendAvailable(false);
       return false;
     }
   };
 
+  scheduleBackendSync = function () {
+    if (!isBackendAvailable() || !backendAuthToken()) return;
+    window.clearTimeout(bridgeSaveTimer);
+    bridgeSaveTimer = window.setTimeout(() => {
+      syncStateToBackend();
+    }, 250);
+  };
+
   syncStateToBackend = async function ({ force = false } = {}) {
-    if ((!backendAvailable && !force) || !backendAuthToken()) return;
-    if (backendSaveInFlight) {
-      backendSaveQueued = true;
+    if ((!isBackendAvailable() && !force) || !backendAuthToken()) return;
+    if (bridgeSaveInFlight) {
+      bridgeSaveQueued = true;
       return;
     }
 
-    backendSaveInFlight = true;
+    bridgeSaveInFlight = true;
     try {
       syncCurrentBranchData();
       await backendRequest("/state", {
@@ -113,27 +153,31 @@
         clearSessionUser();
         showLogin("Sesion vencida. Ingrese de nuevo.");
       } else {
-        backendAvailable = false;
+        setBackendAvailable(false);
       }
     } finally {
-      backendSaveInFlight = false;
-      if (backendSaveQueued) {
-        backendSaveQueued = false;
+      bridgeSaveInFlight = false;
+      if (bridgeSaveQueued) {
+        bridgeSaveQueued = false;
         scheduleBackendSync();
       }
     }
   };
 
+  const originalSaveState = typeof saveState === "function" ? saveState : null;
+  if (originalSaveState && !window.__chicBackendSaveBridge) {
+    window.__chicBackendSaveBridge = true;
+    saveState = function () {
+      originalSaveState();
+      scheduleBackendSync();
+    };
+  }
+
   async function refreshStateAfterLogin(login) {
     try {
       const response = await backendRequest("/state", { cache: "no-store" });
       if (response.state) {
-        state = normalizeStateSnapshot(response.state);
-        try {
-          localStorage.setItem(storageKey, JSON.stringify(state));
-        } catch (error) {
-          // The live backend is still the source of truth.
-        }
+        adoptBackendState(response.state);
         return true;
       }
     } catch (error) {
@@ -156,11 +200,11 @@
 
   async function completeBackendLogin(email, password) {
     try {
-      if (!backendAvailable) {
+      if (!isBackendAvailable()) {
         const health = await backendRequest("/health", { cache: "no-store", skipAuth: true });
-        backendAvailable = Boolean(health?.ok);
+        setBackendAvailable(Boolean(health?.ok));
       }
-      if (!backendAvailable) return null;
+      if (!isBackendAvailable()) return null;
 
       const login = await backendRequest("/login", {
         method: "POST",
@@ -179,7 +223,7 @@
       if (error.status === 401 || error.status === 429) {
         return { denied: true, status: error.status };
       }
-      backendAvailable = false;
+      setBackendAvailable(false);
       return null;
     }
   }
