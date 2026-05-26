@@ -318,17 +318,16 @@ async function handleLogin(req, res) {
     return;
   }
 
-  if (isLoginRateLimited(req, email)) {
-    sendError(req, res, 429, "Demasiados intentos. Espere unos minutos e intente de nuevo.");
-    return;
-  }
-
   const users = Array.isArray(state.users) ? state.users : [];
   const user = users.find((item) => String(item.email || "").trim().toLowerCase() === email);
   const passwordHash = hashPassword(password);
 
   if (!user || user.active === false || !timingSafeEqualText(user.passwordHash, passwordHash)) {
     recordFailedLogin(req, email);
+    if (isLoginRateLimited(req, email)) {
+      sendError(req, res, 429, "Demasiados intentos. Espere unos minutos e intente de nuevo.");
+      return;
+    }
     sendError(req, res, 401, "Email o contrasena incorrectos.");
     return;
   }
@@ -441,10 +440,15 @@ async function serveStatic(req, res, pathname) {
     }
 
     if (path.basename(filePath) === "index.html") {
-      const html = fileBuffer.toString("utf8");
-      if (!html.includes("agenda-upgrade.js")) {
-        responseBuffer = Buffer.from(html.replace("</body>", '    <script src="agenda-upgrade.js"></script>\n  </body>'), "utf8");
+      let html = fileBuffer.toString("utf8");
+      html = html.replace(/\s*<script src="backend-client\.js"><\/script>/, "");
+      if (!html.includes("security-upgrade.js")) {
+        html = html.replace('<script src="app.js"></script>', '<script src="app.js"></script>\n    <script src="security-upgrade.js"></script>');
       }
+      if (!html.includes("agenda-upgrade.js")) {
+        html = html.replace("</body>", '    <script src="agenda-upgrade.js"></script>\n  </body>');
+      }
+      responseBuffer = Buffer.from(html, "utf8");
     }
 
     setBaseHeaders(req, res);
