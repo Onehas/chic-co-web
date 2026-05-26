@@ -5,10 +5,21 @@
   document.querySelectorAll('img[src$="chic-co-logo.svg"]').forEach((image) => {
     image.src = "assets/chic-co-logo-black.png";
   });
+  document.querySelector("#resetDataButton")?.remove();
 
   if (window.location.protocol === "file:" || !window.fetch) return;
 
   const backendTokenKey = "salonSuiteBackendToken";
+  const seedRecordIds = {
+    clients: ["CL-001", "CL-002", "CL-003", "CL-004", "CL-101", "CL-102", "CL-103"],
+    products: ["PRD-001", "PRD-002", "PRD-003", "PRD-004", "PRD-005", "PRD-101", "PRD-102", "PRD-103"],
+    procedures: ["SRV-001", "SRV-002", "SRV-003", "SRV-004", "SRV-005", "SRV-101", "SRV-102", "SRV-103"],
+    activeProcedures: ["ACT-001", "ACT-002", "ACT-101"],
+    plans: ["PLN-001", "PLN-002", "PLN-101"],
+    appointments: ["CIT-001", "CIT-002", "CIT-101", "CIT-102"],
+    invoices: ["FAC-001", "FAC-002", "FAC-101"],
+    stockMovements: ["MOV-101"]
+  };
   let bridgeBackendAvailable = false;
   let bridgeSaveTimer = null;
   let bridgeSaveInFlight = false;
@@ -40,11 +51,40 @@
   function adoptBackendState(snapshot) {
     if (!snapshot) return;
     state = typeof normalizeStateSnapshot === "function" ? normalizeStateSnapshot(snapshot) : snapshot;
+    const removedSeedRecords = removeSeedRecords(state);
     try {
       localStorage.setItem(storageKey, JSON.stringify(state));
     } catch (error) {
       // The backend remains the source of truth if localStorage is blocked.
     }
+    if (removedSeedRecords && backendAuthToken()) {
+      window.setTimeout(() => syncStateToBackend({ force: true }), 0);
+    }
+  }
+
+  function removeSeedRecords(targetState) {
+    if (!targetState || typeof targetState !== "object") return false;
+    let changed = cleanCollections(targetState);
+    if (targetState.branches && typeof targetState.branches === "object") {
+      Object.values(targetState.branches).forEach((branchData) => {
+        changed = cleanCollections(branchData) || changed;
+      });
+    }
+    return changed;
+  }
+
+  function cleanCollections(target) {
+    let changed = false;
+    Object.entries(seedRecordIds).forEach(([collectionName, ids]) => {
+      if (!Array.isArray(target?.[collectionName])) return;
+      const blockedIds = new Set(ids);
+      const filtered = target[collectionName].filter((item) => !blockedIds.has(item?.id));
+      if (filtered.length !== target[collectionName].length) {
+        target[collectionName] = filtered;
+        changed = true;
+      }
+    });
+    return changed;
   }
 
   function backendAuthToken() {
