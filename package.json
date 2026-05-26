@@ -2,7 +2,7 @@
   "name": "chic-co-web",
   "version": "1.0.0",
   "private": true,
-  "description": "App web Chic & Co con backend local ligero.",
+  "description": "App web Chic & Co con backend y datos online.",
   "scripts": {
     "start": "node backend/server.js",
     "dev": "node backend/server.js"
