@@ -435,7 +435,7 @@ async function serveStatic(req, res, pathname) {
     let responseBuffer = fileBuffer;
 
     if (path.basename(filePath) === "app.js") {
-      const js = fileBuffer.toString("utf8").replace(/passwordHash:\s*"[a-f0-9]{64}"/gi, "passwordHash: demoPasswordHash");
+      const js = fileBuffer.toString("utf8").replace(/passwordHash:\s*"[a-f0-9]{64}"/gi, "passwordHash: fallbackPasswordHash");
       responseBuffer = Buffer.from(js, "utf8");
     }
 

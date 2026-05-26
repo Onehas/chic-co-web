@@ -1,6 +1,6 @@
 const storageKey = "salonSuiteStateV2";
 const authSessionKey = "salonSuiteSessionUserId";
-const demoPasswordHash = "d3ad9315b7be5dd53b31a273b3b3aba5defe700808305aa16a3062b76658a791";
+const fallbackPasswordHash = "d3ad9315b7be5dd53b31a273b3b3aba5defe700808305aa16a3062b76658a791";
 
 const permissionModules = ["clientes", "inventario", "procedimientos", "enCurso", "planes", "citas", "facturacion", "usuarios"];
 
@@ -51,11 +51,11 @@ const rolePresets = {
 const superUserAccount = {
   id: "USR-000",
   name: "Gabriel Arce",
-  email: "gaboarcegazel@outlook.com",
+  email: "",
   role: "super",
   function: "Super usuario",
   active: true,
-  passwordHash: "8761fab13ae64eed33cad324c8bf7023caa5cf9ec63c858fd4e421e7650d51a5",
+  passwordHash: fallbackPasswordHash,
   permissions: rolePresets.super.permissions
 };
 
@@ -108,259 +108,21 @@ const monthNames = [
 const weekdayNames = ["Domingo", "Lunes", "Martes", "Miercoles", "Jueves", "Viernes", "Sabado"];
 const weekdayShortNames = ["Do", "Lu", "Ma", "Mi", "Ju", "Vi", "Sa"];
 
+function emptyBranchData() {
+  return {
+    clients: [],
+    products: [],
+    procedures: [],
+    activeProcedures: [],
+    plans: [],
+    appointments: [],
+    invoices: [],
+    stockMovements: []
+  };
+}
+
 const defaultState = {
-  clients: [
-    {
-      id: "CL-001",
-      name: "Maria Lopez",
-      phone: "8888-1234",
-      email: "maria@correo.com",
-      lastVisit: "2026-04-24",
-      notes: "Cabello fino. Evitar productos con amoniaco."
-    },
-    {
-      id: "CL-002",
-      name: "Valeria Soto",
-      phone: "8701-5588",
-      email: "valeria@correo.com",
-      lastVisit: "2026-04-27",
-      notes: "Prefiere citas por la tarde."
-    },
-    {
-      id: "CL-003",
-      name: "Ana Rojas",
-      phone: "8420-9011",
-      email: "ana@correo.com",
-      lastVisit: "2026-04-18",
-      notes: "Plan facial en seguimiento."
-    },
-    {
-      id: "CL-004",
-      name: "Karla Mena",
-      phone: "6012-7710",
-      email: "karla@correo.com",
-      lastVisit: "2026-04-12",
-      notes: "Interesada en depilacion laser."
-    }
-  ],
-  products: [
-    {
-      id: "PRD-001",
-      name: "Peroxido 20 vol.",
-      category: "Quimicos",
-      stock: 6,
-      min: 8,
-      unit: "botellas",
-      cost: 3200,
-      price: 5500,
-      supplier: "Beauty Pro"
-    },
-    {
-      id: "PRD-002",
-      name: "Tinte rubio 8.1",
-      category: "Color",
-      stock: 11,
-      min: 5,
-      unit: "tubos",
-      cost: 4100,
-      price: 7600,
-      supplier: "Color Lab"
-    },
-    {
-      id: "PRD-003",
-      name: "Mascarilla hidratante",
-      category: "Tratamiento",
-      stock: 3,
-      min: 4,
-      unit: "tarros",
-      cost: 8200,
-      price: 14500,
-      supplier: "Hair Care"
-    },
-    {
-      id: "PRD-004",
-      name: "Serum despigmentante",
-      category: "Facial",
-      stock: 9,
-      min: 3,
-      unit: "ampollas",
-      cost: 5400,
-      price: 9500,
-      supplier: "Derma Shop"
-    },
-    {
-      id: "PRD-005",
-      name: "Gel conductor",
-      category: "Aparatologia",
-      stock: 2,
-      min: 3,
-      unit: "galones",
-      cost: 6900,
-      price: 11000,
-      supplier: "Esthetic CR"
-    }
-  ],
-  procedures: [
-    {
-      id: "SRV-001",
-      name: "Limpieza facial profunda",
-      category: "Facial",
-      duration: 90,
-      price: 42000,
-      sessions: 1,
-      productId: "PRD-004",
-      aftercare: "Hidratar la piel y evitar sol directo por 24 horas."
-    },
-    {
-      id: "SRV-002",
-      name: "Plan despigmentante",
-      category: "Facial",
-      duration: 60,
-      price: 38000,
-      sessions: 6,
-      productId: "PRD-004",
-      aftercare: "Usar protector solar y enviar foto de control semanal."
-    },
-    {
-      id: "SRV-003",
-      name: "Depilacion laser axila",
-      category: "Laser",
-      duration: 30,
-      price: 25000,
-      sessions: 8,
-      productId: "PRD-005",
-      aftercare: "No rasurar el mismo dia. Evitar calor intenso por 48 horas."
-    },
-    {
-      id: "SRV-004",
-      name: "Color completo",
-      category: "Cabello",
-      duration: 150,
-      price: 58000,
-      sessions: 1,
-      productId: "PRD-001",
-      aftercare: "Usar shampoo sin sal y mascarilla semanal."
-    },
-    {
-      id: "SRV-005",
-      name: "Hidratacion capilar",
-      category: "Cabello",
-      duration: 50,
-      price: 22000,
-      sessions: 1,
-      productId: "PRD-003",
-      aftercare: "Evitar lavado por 24 horas."
-    }
-  ],
-  activeProcedures: [
-    {
-      id: "ACT-001",
-      clientId: "CL-001",
-      procedureId: "SRV-004",
-      specialist: "Camila",
-      status: "En progreso",
-      started: "2026-04-29",
-      next: "2026-04-29",
-      notes: "Aplicacion de color en proceso.",
-      productsUsed: ["PRD-001"]
-    },
-    {
-      id: "ACT-002",
-      clientId: "CL-003",
-      procedureId: "SRV-002",
-      specialist: "Andrea",
-      status: "En progreso",
-      started: "2026-04-28",
-      next: "2026-05-06",
-      notes: "Sesion 2 de plan despigmentante.",
-      productsUsed: []
-    }
-  ],
-  plans: [
-    {
-      id: "PLN-001",
-      clientId: "CL-003",
-      procedureId: "SRV-002",
-      title: "Despigmentante 12 semanas",
-      sessionsTotal: 6,
-      sessionsDone: 2,
-      intervalDays: 14,
-      start: "2026-04-08",
-      next: "2026-05-06",
-      paid: 76000,
-      total: 228000,
-      status: "Activo",
-      notes: "Fotos de control cada 2 sesiones."
-    },
-    {
-      id: "PLN-002",
-      clientId: "CL-004",
-      procedureId: "SRV-003",
-      title: "Laser axila 8 sesiones",
-      sessionsTotal: 8,
-      sessionsDone: 1,
-      intervalDays: 30,
-      start: "2026-04-15",
-      next: "2026-05-15",
-      paid: 25000,
-      total: 200000,
-      status: "Activo",
-      notes: "Revisar sensibilidad antes de subir potencia."
-    }
-  ],
-  appointments: [
-    {
-      id: "CIT-001",
-      clientId: "CL-002",
-      procedureId: "SRV-005",
-      date: "2026-04-29",
-      time: "14:30",
-      specialist: "Paola",
-      status: "Confirmada"
-    },
-    {
-      id: "CIT-002",
-      clientId: "CL-004",
-      procedureId: "SRV-003",
-      date: "2026-04-30",
-      time: "10:00",
-      specialist: "Andrea",
-      status: "Pendiente"
-    }
-  ],
-  invoices: [
-    {
-      id: "FAC-001",
-      date: "2026-04-29",
-      clientId: "CL-001",
-      area: "Belleza",
-      procedureId: "SRV-004",
-      productId: "PRD-002",
-      productQty: 1,
-      serviceAmount: 58000,
-      productAmount: 7600,
-      ivaRate: 13,
-      paid: 74128,
-      paymentMethod: "Tarjeta",
-      notes: "Color completo y tinte adicional."
-    },
-    {
-      id: "FAC-002",
-      date: "2026-04-30",
-      clientId: "CL-003",
-      area: "Estetica",
-      procedureId: "SRV-002",
-      productId: "PRD-004",
-      productQty: 1,
-      serviceAmount: 38000,
-      productAmount: 9500,
-      ivaRate: 13,
-      paid: 53675,
-      paymentMethod: "Efectivo",
-      notes: "Sesion de plan despigmentante."
-    }
-  ],
-  stockMovements: [],
+  ...emptyBranchData(),
   currentBranchId: "rohrmoser",
   currentUserId: "USR-000",
   users: [
@@ -368,41 +130,41 @@ const defaultState = {
     {
       id: "USR-001",
       name: "Andres",
-      email: "andres@chicco.local",
-      role: "admin",
-      function: "Administrador general",
+      email: "",
+      role: systemUserAuth["USR-001"]?.role || "super",
+      function: systemUserAuth["USR-001"]?.function || "Super usuario",
       active: true,
-      passwordHash: demoPasswordHash,
-      permissions: rolePresets.admin.permissions
+      passwordHash: fallbackPasswordHash,
+      permissions: systemUserAuth["USR-001"]?.permissions || rolePresets.super.permissions
     },
     {
       id: "USR-002",
       name: "Gabriela",
-      email: "gabriela@chicco.local",
+      email: "",
       role: "admin",
       function: "Administradora general",
       active: true,
-      passwordHash: demoPasswordHash,
+      passwordHash: fallbackPasswordHash,
       permissions: rolePresets.admin.permissions
     },
     {
       id: "USR-003",
       name: "Paola",
-      email: "paola@chicco.local",
+      email: "",
       role: "recepcion",
       function: "Recepcion y agenda",
       active: true,
-      passwordHash: demoPasswordHash,
+      passwordHash: fallbackPasswordHash,
       permissions: rolePresets.recepcion.permissions
     },
     {
       id: "USR-004",
       name: "Camila",
-      email: "camila@chicco.local",
+      email: "",
       role: "especialista",
       function: "Especialista estetica",
       active: true,
-      passwordHash: demoPasswordHash,
+      passwordHash: fallbackPasswordHash,
       permissions: rolePresets.especialista.permissions
     }
   ]
@@ -500,178 +262,7 @@ function writeBranchData(target, branchData) {
 }
 
 function alajuelaBranchData() {
-  return {
-    clients: [
-      {
-        id: "CL-101",
-        name: "Lucia Fernandez",
-        phone: "7010-2244",
-        email: "lucia@correo.com",
-        lastVisit: "2026-05-09",
-        notes: "Prefiere manicura semipermanente."
-      },
-      {
-        id: "CL-102",
-        name: "Sofia Quesada",
-        phone: "8844-1902",
-        email: "sofia@correo.com",
-        lastVisit: "2026-05-07",
-        notes: "Seguimiento facial mensual."
-      },
-      {
-        id: "CL-103",
-        name: "Daniela Castro",
-        phone: "6075-4411",
-        email: "daniela@correo.com",
-        lastVisit: "2026-05-01",
-        notes: "Interesada en color fantasia."
-      }
-    ],
-    products: [
-      {
-        id: "PRD-101",
-        name: "Base rubber",
-        category: "Unas",
-        stock: 14,
-        min: 6,
-        unit: "frascos",
-        cost: 5200,
-        price: 8500,
-        supplier: "Nail Pro"
-      },
-      {
-        id: "PRD-102",
-        name: "Serum vitamina C",
-        category: "Estetica",
-        stock: 5,
-        min: 4,
-        unit: "unidades",
-        cost: 8900,
-        price: 14500,
-        supplier: "Skin Lab"
-      },
-      {
-        id: "PRD-103",
-        name: "Decolorante azul",
-        category: "Color",
-        stock: 4,
-        min: 7,
-        unit: "sobres",
-        cost: 2800,
-        price: 5200,
-        supplier: "Beauty Color"
-      }
-    ],
-    procedures: [
-      {
-        id: "SRV-101",
-        name: "Manicura semipermanente",
-        category: "Unas",
-        duration: 75,
-        price: 18000,
-        sessions: 1,
-        productId: "PRD-101",
-        aftercare: "Usar aceite de cuticula por la noche."
-      },
-      {
-        id: "SRV-102",
-        name: "Facial luminosidad",
-        category: "Facial",
-        duration: 60,
-        price: 32000,
-        sessions: 1,
-        productId: "PRD-102",
-        aftercare: "Usar bloqueador y evitar exfoliacion por 48 horas."
-      },
-      {
-        id: "SRV-103",
-        name: "Color fantasia",
-        category: "Color",
-        duration: 180,
-        price: 72000,
-        sessions: 1,
-        productId: "PRD-103",
-        aftercare: "Lavar con agua fria y shampoo sin sulfatos."
-      }
-    ],
-    activeProcedures: [
-      {
-        id: "ACT-101",
-        clientId: "CL-102",
-        procedureId: "SRV-102",
-        specialist: "Melissa Castro",
-        status: "En progreso",
-        started: "2026-05-10",
-        next: "2026-05-12",
-        notes: "Control de manchas y luminosidad.",
-        productsUsed: ["PRD-102"]
-      }
-    ],
-    plans: [
-      {
-        id: "PLN-101",
-        clientId: "CL-102",
-        procedureId: "SRV-102",
-        title: "Facial luminosidad mensual",
-        sessionsTotal: 4,
-        sessionsDone: 1,
-        intervalDays: 30,
-        start: "2026-05-07",
-        next: "2026-06-06",
-        paid: 32000,
-        total: 128000,
-        status: "Activo",
-        notes: "Tomar foto comparativa en cada visita."
-      }
-    ],
-    appointments: [
-      {
-        id: "CIT-101",
-        clientId: "CL-101",
-        procedureId: "SRV-101",
-        date: "2026-05-12",
-        time: "11:00",
-        specialist: "Gabriela Mora",
-        status: "Confirmada"
-      },
-      {
-        id: "CIT-102",
-        clientId: "CL-103",
-        procedureId: "SRV-103",
-        date: "2026-05-14",
-        time: "15:30",
-        specialist: "Lucia Herrera",
-        status: "Pendiente"
-      }
-    ],
-    invoices: [
-      {
-        id: "FAC-101",
-        date: "2026-05-09",
-        clientId: "CL-101",
-        area: "Belleza",
-        procedureId: "SRV-101",
-        productId: "PRD-101",
-        productQty: 1,
-        serviceAmount: 18000,
-        productAmount: 0,
-        ivaRate: 13,
-        paid: 20340,
-        paymentMethod: "Tarjeta",
-        notes: "Manicura semipermanente."
-      }
-    ],
-    stockMovements: [
-      {
-        id: "MOV-101",
-        productId: "PRD-103",
-        type: "Salida",
-        quantity: 1,
-        reason: "Prueba de color en mechon",
-        date: "2026-05-11"
-      }
-    ]
-  };
+  return emptyBranchData();
 }
 
 function defaultBranches() {
@@ -779,7 +370,7 @@ function normalizeUser(user) {
     ...user,
     role,
     active: user.active !== false,
-    passwordHash: user.passwordHash || demoPasswordHash,
+    passwordHash: user.passwordHash || fallbackPasswordHash,
     permissions: permissionModules.reduce((permissions, moduleName) => {
       permissions[moduleName] = {
         ...basePermissions[moduleName],
@@ -928,7 +519,7 @@ async function handleLogin() {
     showApp(user.id);
     showToast(`Bienvenido, ${user.name}`);
   } catch (error) {
-    showLogin("Este navegador no permite validar el acceso local.");
+    showLogin("No se pudo validar el acceso.");
   }
 }
 
@@ -2278,7 +1869,7 @@ function addUser(data) {
     role,
     function: data.function.trim(),
     active: true,
-    passwordHash: demoPasswordHash,
+    passwordHash: fallbackPasswordHash,
     permissions: clone(rolePresets[role].permissions)
   });
   persistAndRender("Usuario guardado");
@@ -2349,9 +1940,9 @@ function handleClick(event) {
       return;
     }
     const labels = {
-      sync: "Datos sincronizados localmente",
+      sync: "Datos sincronizados",
       transfer: "Turno cambiado",
-      logout: "Sesion cerrada localmente"
+      logout: "Sesion cerrada"
     };
     showToast(labels[quickButton.dataset.quick]);
     return;
@@ -2787,15 +2378,6 @@ elements.reasonModal.addEventListener("click", (event) => {
   if (event.target === elements.reasonModal) {
     closeStockReasonModal();
   }
-});
-elements.resetDataButton.addEventListener("click", () => {
-  const shouldReset = window.confirm("Esto reinicia los datos demo guardados en este navegador. Continuar?");
-  if (!shouldReset) return;
-  state = createInitialState();
-  prefill = {};
-  saveState();
-  renderAll();
-  showToast("Datos demo reiniciados");
 });
 
 document.addEventListener("submit", handleSubmit);
