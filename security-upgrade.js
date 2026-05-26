@@ -124,7 +124,7 @@
     }
   };
 
-  loginWithBackend = async function (email, password) {
+  async function completeBackendLogin(email, password) {
     try {
       if (!backendAvailable) {
         const health = await backendRequest("/health", { cache: "no-store", skipAuth: true });
@@ -155,12 +155,47 @@
       return login;
     } catch (error) {
       if (error.status === 401 || error.status === 429) {
-        return { denied: true };
+        return { denied: true, status: error.status };
       }
       backendAvailable = false;
       return null;
     }
+  }
+
+  loginWithBackend = async function (email, password) {
+    return completeBackendLogin(email, password);
   };
+
+  document.addEventListener(
+    "submit",
+    async (event) => {
+      if (event.target !== elements.loginForm) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+
+      const email = elements.loginEmail.value.trim();
+      const password = elements.loginPassword.value;
+      elements.loginError.textContent = "";
+
+      const login = await completeBackendLogin(email, password);
+      if (login?.userId) {
+        const user = state.users.find((item) => item.id === login.userId) || login.user;
+        saveSessionUser(login.userId);
+        elements.loginForm.reset();
+        showApp(login.userId);
+        showToast(`Bienvenido, ${user?.name || "Usuario"}`);
+        return;
+      }
+
+      if (login?.status === 429) {
+        showLogin("Demasiados intentos. Espere unos minutos e intente de nuevo.");
+        return;
+      }
+
+      showLogin("Email o contrasena incorrectos.");
+    },
+    true
+  );
 
   const originalLogout = logout;
   logout = function () {
