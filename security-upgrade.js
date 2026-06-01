@@ -11,6 +11,7 @@
 
   const backendTokenKey = "salonSuiteBackendToken";
   const pendingSyncKey = "salonSuitePendingOnlineSync";
+  const inventoryCategoryOptions = ["General", "Cabello", "Facial", "Venta"];
   const seedRecordFingerprints = {
     clients: {
       "CL-001": { name: "Maria Lopez" },
@@ -103,6 +104,36 @@
     if (now - bridgeLastSyncToast < 1500) return;
     bridgeLastSyncToast = now;
     showToast("Guardado online");
+  }
+
+  function escapeOptionValue(value) {
+    return String(value)
+      .replaceAll("&", "&amp;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;");
+  }
+
+  function applyInventoryCategoryOptions() {
+    const select = document.querySelector('form[data-form="product"] select[name="category"]');
+    if (!select) return;
+
+    const selectedValue = inventoryCategoryOptions.includes(select.value) ? select.value : inventoryCategoryOptions[0];
+    select.innerHTML = inventoryCategoryOptions
+      .map((category) => `<option value="${escapeOptionValue(category)}">${escapeOptionValue(category)}</option>`)
+      .join("");
+    select.value = selectedValue;
+  }
+
+  function wrapRenderForInventoryCategories(functionName) {
+    const originalRender = typeof window[functionName] === "function" ? window[functionName] : null;
+    if (!originalRender) return;
+
+    window[functionName] = function (...args) {
+      const result = originalRender.apply(this, args);
+      applyInventoryCategoryOptions();
+      return result;
+    };
   }
 
   function setBackendAvailable(value) {
@@ -390,6 +421,12 @@
   loginWithBackend = async function (email, password) {
     return completeBackendLogin(email, password);
   };
+
+  if (!window.__chicInventoryCategoryGuard) {
+    window.__chicInventoryCategoryGuard = true;
+    ["renderView", "renderAll", "setModule"].forEach(wrapRenderForInventoryCategories);
+    window.setTimeout(applyInventoryCategoryOptions, 0);
+  }
 
   document.addEventListener(
     "submit",
