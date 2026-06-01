@@ -10,6 +10,7 @@
   if (window.location.protocol === "file:" || !window.fetch) return;
 
   const backendTokenKey = "salonSuiteBackendToken";
+  const pendingSyncKey = "salonSuitePendingOnlineSync";
   const seedRecordFingerprints = {
     clients: {
       "CL-001": { name: "Maria Lopez" },
@@ -50,6 +51,7 @@
   let bridgeSaveTimer = null;
   let bridgeSaveInFlight = false;
   let bridgeSaveQueued = false;
+  let bridgeLastSyncToast = 0;
 
   function apiRequestPath(path) {
     if (typeof apiPath === "function") return apiPath(path);
@@ -63,6 +65,44 @@
     } catch (error) {
       return bridgeBackendAvailable;
     }
+  }
+
+  function markPendingOnlineSync() {
+    try {
+      localStorage.setItem(
+        pendingSyncKey,
+        JSON.stringify({
+          at: Date.now(),
+          branchId: state?.currentBranchId || ""
+        })
+      );
+    } catch (error) {
+      // Online sync still runs even when this browser blocks the pending marker.
+    }
+  }
+
+  function clearPendingOnlineSync() {
+    try {
+      localStorage.removeItem(pendingSyncKey);
+    } catch (error) {
+      // Ignore storage cleanup failures.
+    }
+  }
+
+  function hasPendingOnlineSync() {
+    try {
+      return Boolean(localStorage.getItem(pendingSyncKey));
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function showSyncSavedToast() {
+    if (typeof showToast !== "function") return;
+    const now = Date.now();
+    if (now - bridgeLastSyncToast < 1500) return;
+    bridgeLastSyncToast = now;
+    showToast("Guardado online");
   }
 
   function setBackendAvailable(value) {
@@ -227,15 +267,15 @@
     }
   };
 
-  scheduleBackendSync = function () {
+  scheduleBackendSync = function ({ immediate = false } = {}) {
     if (!isBackendAvailable() || !backendAuthToken()) return;
     window.clearTimeout(bridgeSaveTimer);
     bridgeSaveTimer = window.setTimeout(() => {
       syncStateToBackend();
-    }, 250);
+    }, immediate ? 0 : 250);
   };
 
-  syncStateToBackend = async function ({ force = false } = {}) {
+  syncStateToBackend = async function ({ force = false, keepalive = false } = {}) {
     if ((!isBackendAvailable() && !force) || !backendAuthToken()) return;
     if (bridgeSaveInFlight) {
       bridgeSaveQueued = true;
@@ -247,14 +287,21 @@
       syncCurrentBranchData();
       await backendRequest("/state", {
         method: "PUT",
-        body: JSON.stringify({ state })
+        body: JSON.stringify({ state }),
+        keepalive
       });
+      clearPendingOnlineSync();
+      showSyncSavedToast();
     } catch (error) {
       if (error.status === 401) {
         clearSessionUser();
         showLogin("Sesion vencida. Ingrese de nuevo.");
       } else {
+        markPendingOnlineSync();
         setBackendAvailable(false);
+        if (typeof showToast === "function") {
+          showToast("No se pudo guardar online. Reintentando al volver a conectar.");
+        }
       }
     } finally {
       bridgeSaveInFlight = false;
@@ -269,12 +316,23 @@
   if (originalSaveState && !window.__chicBackendSaveBridge) {
     window.__chicBackendSaveBridge = true;
     saveState = function () {
+      markPendingOnlineSync();
       originalSaveState();
-      scheduleBackendSync();
+      scheduleBackendSync({ immediate: true });
     };
   }
 
   async function refreshStateAfterLogin(login) {
+    if (hasPendingOnlineSync()) {
+      try {
+        if (login?.userId) state.currentUserId = login.userId;
+        await syncStateToBackend({ force: true });
+        return true;
+      } catch (error) {
+        console.warn("No se pudo subir el estado pendiente antes de refrescar.", error);
+      }
+    }
+
     try {
       const response = await backendRequest("/state", { cache: "no-store" });
       if (response.state) {
@@ -384,4 +442,16 @@
     }
     if (online) restoreSession();
   }, 0);
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden" && hasPendingOnlineSync()) {
+      syncStateToBackend({ force: true, keepalive: true });
+    }
+  });
+
+  window.addEventListener("pagehide", () => {
+    if (hasPendingOnlineSync()) {
+      syncStateToBackend({ force: true, keepalive: true });
+    }
+  });
 })();
