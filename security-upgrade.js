@@ -10,15 +10,41 @@
   if (window.location.protocol === "file:" || !window.fetch) return;
 
   const backendTokenKey = "salonSuiteBackendToken";
-  const seedRecordIds = {
-    clients: ["CL-001", "CL-002", "CL-003", "CL-004", "CL-101", "CL-102", "CL-103"],
-    products: ["PRD-001", "PRD-002", "PRD-003", "PRD-004", "PRD-005", "PRD-101", "PRD-102", "PRD-103"],
-    procedures: ["SRV-001", "SRV-002", "SRV-003", "SRV-004", "SRV-005", "SRV-101", "SRV-102", "SRV-103"],
-    activeProcedures: ["ACT-001", "ACT-002", "ACT-101"],
-    plans: ["PLN-001", "PLN-002", "PLN-101"],
-    appointments: ["CIT-001", "CIT-002", "CIT-101", "CIT-102"],
-    invoices: ["FAC-001", "FAC-002", "FAC-101"],
-    stockMovements: ["MOV-101"]
+  const seedRecordFingerprints = {
+    clients: {
+      "CL-001": { name: "Maria Lopez" },
+      "CL-002": { name: "Valeria Soto" },
+      "CL-003": { name: "Ana Rojas" },
+      "CL-004": { name: "Karla Mena" },
+      "CL-101": { name: "Lucia Fernandez" },
+      "CL-102": { name: "Sofia Quesada" },
+      "CL-103": { name: "Daniela Castro" }
+    },
+    products: {
+      "PRD-001": { name: "Peroxido 20 vol." },
+      "PRD-002": { name: "Tinte rubio 8.1" },
+      "PRD-003": { name: "Mascarilla hidratante" },
+      "PRD-004": { name: "Serum despigmentante" },
+      "PRD-005": { name: "Gel conductor" },
+      "PRD-101": { name: "Base rubber" },
+      "PRD-102": { name: "Serum vitamina C" },
+      "PRD-103": { name: "Decolorante azul" }
+    },
+    procedures: {
+      "SRV-001": { name: "Limpieza facial profunda" },
+      "SRV-002": { name: "Plan despigmentante" },
+      "SRV-003": { name: "Depilacion laser axila" },
+      "SRV-004": { name: "Color completo" },
+      "SRV-005": { name: "Hidratacion capilar" },
+      "SRV-101": { name: "Manicura semipermanente" },
+      "SRV-102": { name: "Facial luminosidad" },
+      "SRV-103": { name: "Color fantasia" }
+    },
+    plans: {
+      "PLN-001": { title: "Despigmentante 12 semanas" },
+      "PLN-002": { title: "Laser axila 8 sesiones" },
+      "PLN-101": { title: "Facial luminosidad mensual" }
+    }
   };
   let bridgeBackendAvailable = false;
   let bridgeSaveTimer = null;
@@ -75,16 +101,51 @@
 
   function cleanCollections(target) {
     let changed = false;
-    Object.entries(seedRecordIds).forEach(([collectionName, ids]) => {
+    const matchedSeedIds = collectMatchedSeedIds(target);
+
+    Object.entries(seedRecordFingerprints).forEach(([collectionName, fingerprints]) => {
       if (!Array.isArray(target?.[collectionName])) return;
-      const blockedIds = new Set(ids);
-      const filtered = target[collectionName].filter((item) => !blockedIds.has(item?.id));
+      const filtered = target[collectionName].filter((item) => !matchesFingerprint(item, fingerprints[item?.id]));
       if (filtered.length !== target[collectionName].length) {
         target[collectionName] = filtered;
         changed = true;
       }
     });
+
+    const relationCollections = ["activeProcedures", "appointments", "invoices", "stockMovements"];
+    relationCollections.forEach((collectionName) => {
+      if (!Array.isArray(target?.[collectionName])) return;
+      const filtered = target[collectionName].filter((item) => !isLinkedToMatchedSeed(item, matchedSeedIds));
+      if (filtered.length !== target[collectionName].length) {
+        target[collectionName] = filtered;
+        changed = true;
+      }
+    });
+
     return changed;
+  }
+
+  function collectMatchedSeedIds(target) {
+    const ids = new Set();
+    Object.entries(seedRecordFingerprints).forEach(([collectionName, fingerprints]) => {
+      if (!Array.isArray(target?.[collectionName])) return;
+      target[collectionName].forEach((item) => {
+        if (matchesFingerprint(item, fingerprints[item?.id])) {
+          ids.add(item.id);
+        }
+      });
+    });
+    return ids;
+  }
+
+  function matchesFingerprint(record, fingerprint) {
+    if (!record || !fingerprint) return false;
+    return Object.entries(fingerprint).every(([field, expected]) => String(record[field] || "") === expected);
+  }
+
+  function isLinkedToMatchedSeed(record, matchedSeedIds) {
+    if (!record || !matchedSeedIds.size) return false;
+    return ["clientId", "procedureId", "productId"].some((field) => matchedSeedIds.has(record[field]));
   }
 
   function backendAuthToken() {
