@@ -429,6 +429,19 @@
   }
 
   document.addEventListener(
+    "click",
+    (event) => {
+      const syncButton = event.target.closest('[data-quick="sync"]');
+      if (!syncButton) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      markPendingOnlineSync();
+      syncStateToBackend({ force: true });
+    },
+    true
+  );
+
+  document.addEventListener(
     "submit",
     async (event) => {
       if (event.target !== elements.loginForm) return;
@@ -466,6 +479,13 @@
 
   const originalLogout = logout;
   logout = function () {
+    if (hasPendingOnlineSync() && backendAuthToken()) {
+      syncStateToBackend({ force: true }).finally(() => {
+        clearBackendAuthToken();
+        originalLogout();
+      });
+      return;
+    }
     clearBackendAuthToken();
     originalLogout();
   };
