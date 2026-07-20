@@ -1,6 +1,8 @@
 databases:
   - name: chic-co-db
-    plan: free
+    plan: basic-1gb
+    diskSizeGB: 1
+    storageAutoscalingEnabled: false
     databaseName: chic_co
     user: chic_co
 
