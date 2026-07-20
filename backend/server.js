@@ -42,6 +42,19 @@ const systemUserAuth = {
   "USR-004": {}
 };
 
+const moduleWriteCollections = {
+  clientes: ["clients"],
+  inventario: ["products", "stockMovements"],
+  procedimientos: ["procedures"],
+  enCurso: ["activeProcedures", "products", "stockMovements"],
+  planes: ["plans", "activeProcedures", "appointments"],
+  citas: ["appointments", "activeProcedures"],
+  facturacion: ["invoices", "products", "stockMovements"],
+  usuarios: ["users"]
+};
+const branchDataCollections = ["clients", "products", "procedures", "activeProcedures", "plans", "appointments", "invoices", "stockMovements"];
+const auditLogLimit = 300;
+
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -201,6 +214,138 @@ function preserveProtectedState(nextState, currentState) {
         passwordHash: currentUser.passwordHash
       };
     })
+  };
+}
+
+function cloneValue(value) {
+  return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+}
+
+function sessionUserFromState(state, session) {
+  return Array.isArray(state?.users) ? state.users.find((user) => user.id === session.userId) || null : null;
+}
+
+function isSuperUser(user) {
+  return Boolean(user?.active && user.role === "super");
+}
+
+function isFullAccessUser(user) {
+  return Boolean(user?.active && (user.role === "super" || user.role === "admin"));
+}
+
+function canWriteModule(user, moduleName) {
+  return Boolean(user?.active && user.permissions?.[moduleName]?.write);
+}
+
+function writableCollectionsForUser(user) {
+  if (isFullAccessUser(user)) return new Set(["users", ...branchDataCollections]);
+  const collections = new Set();
+  Object.entries(moduleWriteCollections).forEach(([moduleName, collectionNames]) => {
+    if (!canWriteModule(user, moduleName)) return;
+    collectionNames.forEach((collectionName) => collections.add(collectionName));
+  });
+  return collections;
+}
+
+function collectionChanged(nextState, currentState, collectionName) {
+  return JSON.stringify(nextState?.[collectionName] || []) !== JSON.stringify(currentState?.[collectionName] || []);
+}
+
+function branchCollectionChanged(nextState, currentState, branchId, collectionName) {
+  return JSON.stringify(nextState?.branches?.[branchId]?.[collectionName] || []) !== JSON.stringify(currentState?.branches?.[branchId]?.[collectionName] || []);
+}
+
+function changedCollections(nextState, currentState) {
+  const changed = new Set();
+  branchDataCollections.forEach((collectionName) => {
+    if (collectionChanged(nextState, currentState, collectionName)) changed.add(collectionName);
+  });
+  if (collectionChanged(nextState, currentState, "users")) changed.add("users");
+
+  const branchIds = new Set([...Object.keys(currentState?.branches || {}), ...Object.keys(nextState?.branches || {})]);
+  branchIds.forEach((branchId) => {
+    branchDataCollections.forEach((collectionName) => {
+      if (branchCollectionChanged(nextState, currentState, branchId, collectionName)) {
+        changed.add(`${branchId}.${collectionName}`);
+      }
+    });
+  });
+  return Array.from(changed).sort();
+}
+
+function addAuditEntry(state, user, action, collections = []) {
+  const entry = {
+    id: crypto.randomUUID(),
+    at: new Date().toISOString(),
+    action,
+    userId: user?.id || "",
+    userName: user?.name || "Sistema",
+    role: user?.role || "",
+    collections
+  };
+  const auditLog = Array.isArray(state.auditLog) ? state.auditLog : [];
+  state.auditLog = [entry, ...auditLog].slice(0, auditLogLimit);
+}
+
+function applyAllowedCollections(mergedState, nextState, collectionNames) {
+  collectionNames.forEach((collectionName) => {
+    if (Array.isArray(nextState?.[collectionName])) {
+      mergedState[collectionName] = cloneValue(nextState[collectionName]);
+    }
+  });
+}
+
+function applyAllowedBranchCollections(mergedState, nextState, collectionNames) {
+  const branchIds = new Set([...Object.keys(mergedState.branches || {}), ...Object.keys(nextState?.branches || {})]);
+  mergedState.branches = mergedState.branches || {};
+
+  branchIds.forEach((branchId) => {
+    const nextBranch = nextState?.branches?.[branchId];
+    if (!nextBranch) return;
+    mergedState.branches[branchId] = mergedState.branches[branchId] || {};
+    collectionNames.forEach((collectionName) => {
+      if (Array.isArray(nextBranch[collectionName])) {
+        mergedState.branches[branchId][collectionName] = cloneValue(nextBranch[collectionName]);
+      }
+    });
+  });
+}
+
+function applyWritePolicy(nextState, currentState, session) {
+  const user = sessionUserFromState(currentState, session);
+  if (!user?.active) {
+    const error = new Error("Usuario inactivo o no encontrado.");
+    error.statusCode = 403;
+    throw error;
+  }
+
+  const safeNextState = preserveProtectedState(nextState, currentState);
+  if (isFullAccessUser(user)) {
+    const unrestrictedState = preserveProtectedState(safeNextState, currentState);
+    addAuditEntry(unrestrictedState, user, "state.write", changedCollections(unrestrictedState, currentState));
+    return unrestrictedState;
+  }
+
+  const writableCollections = writableCollectionsForUser(user);
+  const mergedState = cloneValue(currentState) || {};
+  mergedState.currentUserId = session.userId;
+  if (typeof nextState.currentBranchId === "string") {
+    mergedState.currentBranchId = nextState.currentBranchId;
+  }
+
+  applyAllowedCollections(mergedState, safeNextState, writableCollections);
+  applyAllowedBranchCollections(mergedState, safeNextState, writableCollections);
+
+  addAuditEntry(mergedState, user, "state.write.limited", changedCollections(mergedState, currentState));
+  return preserveProtectedState(mergedState, currentState);
+}
+
+function backupPayload(state) {
+  return {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    app: "Chic & Co",
+    state: stripSensitiveState(state)
   };
 }
 
@@ -380,6 +525,50 @@ async function handleApi(req, res, pathname) {
     return;
   }
 
+  if (pathname === "/api/backup" && req.method === "GET") {
+    const state = await readState();
+    const user = sessionUserFromState(state, session);
+    if (!isSuperUser(user)) {
+      sendError(req, res, 403, "Solo un super usuario puede exportar respaldos.");
+      return;
+    }
+    sendJson(req, res, 200, { ok: true, backup: backupPayload(state) });
+    return;
+  }
+
+  if (pathname === "/api/backup" && req.method === "POST") {
+    const currentState = await readState();
+    const user = sessionUserFromState(currentState, session);
+    if (!isSuperUser(user)) {
+      sendError(req, res, 403, "Solo un super usuario puede importar respaldos.");
+      return;
+    }
+
+    const payload = await readJsonBody(req);
+    const nextState = payload.state || payload.backup?.state || payload;
+    if (!nextState || typeof nextState !== "object" || Array.isArray(nextState)) {
+      sendError(req, res, 400, "Respaldo invalido.");
+      return;
+    }
+
+    const restoredState = preserveProtectedState(nextState, currentState);
+    addAuditEntry(restoredState, user, "backup.restore", changedCollections(restoredState, currentState));
+    await writeState(restoredState);
+    sendJson(req, res, 200, { ok: true });
+    return;
+  }
+
+  if (pathname === "/api/audit" && req.method === "GET") {
+    const state = await readState();
+    const user = sessionUserFromState(state, session);
+    if (!isFullAccessUser(user)) {
+      sendError(req, res, 403, "Solo usuarios administradores pueden ver la bitacora.");
+      return;
+    }
+    sendJson(req, res, 200, { ok: true, auditLog: Array.isArray(state.auditLog) ? state.auditLog : [] });
+    return;
+  }
+
   if (pathname === "/api/state" && req.method === "PUT") {
     const payload = await readJsonBody(req);
     const nextState = payload.state || payload;
@@ -390,7 +579,14 @@ async function handleApi(req, res, pathname) {
     }
 
     const currentState = await readState();
-    await writeState(preserveProtectedState(nextState, currentState));
+    let writableState;
+    try {
+      writableState = applyWritePolicy(nextState, currentState, session);
+    } catch (error) {
+      sendError(req, res, error.statusCode || 403, error.message || "No tiene permiso para guardar esos cambios.");
+      return;
+    }
+    await writeState(writableState);
     sendJson(req, res, 200, { ok: true });
     return;
   }
@@ -501,6 +697,17 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(port, host, () => {
-  console.log(`Chic & Co backend listo en http://${host}:${port}`);
-});
+if (require.main === module) {
+  server.listen(port, host, () => {
+    console.log(`Chic & Co backend listo en http://${host}:${port}`);
+  });
+}
+
+module.exports = {
+  server,
+  applyWritePolicy,
+  changedCollections,
+  preserveProtectedState,
+  stripSensitiveState,
+  applySystemUserAuth
+};
