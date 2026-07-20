@@ -19,6 +19,7 @@ let pgPool = null;
 let pgReady = false;
 const sessions = new Map();
 const loginAttempts = new Map();
+const receptionPasswordHash = "5813f24ae4432b277c8c92a78bf035caaa8f5a9ad0031441f5eccd2d4c0e2fd0";
 
 const superPermissionModules = ["clientes", "inventario", "procedimientos", "enCurso", "planes", "citas", "facturacion", "usuarios"];
 const superUserPermissions = superPermissionModules.reduce((permissions, moduleName) => {
@@ -37,7 +38,23 @@ const systemUserAuth = {
     function: "Super usuario",
     permissions: superUserPermissions
   },
-  "USR-002": {},
+  "USR-002": {
+    name: "Recepcion",
+    email: "recepcion@chicnco.cr",
+    role: "recepcion",
+    function: "Recepcion y agenda",
+    passwordHash: receptionPasswordHash,
+    permissions: {
+      clientes: { read: true, write: true },
+      inventario: { read: false, write: false },
+      procedimientos: { read: false, write: false },
+      enCurso: { read: true, write: false },
+      planes: { read: true, write: false },
+      citas: { read: true, write: true },
+      facturacion: { read: true, write: true },
+      usuarios: { read: false, write: false }
+    }
+  },
   "USR-003": {},
   "USR-004": {}
 };
