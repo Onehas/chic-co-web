@@ -15,6 +15,7 @@ function replaceSection(source, startMarker, endMarker, replacement) {
 }
 
 const passwordHash = "d3ad9315b7be5dd53b31a273b3b3aba5defe700808305aa16a3062b76658a791";
+const receptionPasswordHash = "5813f24ae4432b277c8c92a78bf035caaa8f5a9ad0031441f5eccd2d4c0e2fd0";
 const legacyPrefix = ["de", "mo"].join("");
 const legacyPasswordName = `${legacyPrefix}PasswordHash`;
 const legacyResetMessage = ["Datos", legacyPrefix, "reiniciados"].join(" ");
@@ -48,7 +49,14 @@ const systemUserAuthBlock = `const systemUserAuth = {
     function: "Super usuario",
     permissions: rolePresets.super.permissions
   },
-  "USR-002": {},
+  "USR-002": {
+    name: "Recepcion",
+    email: "recepcion@chicnco.cr",
+    role: "recepcion",
+    function: "Recepcion y agenda",
+    passwordHash: receptionPasswordHash,
+    permissions: rolePresets.recepcion.permissions
+  },
   "USR-003": {},
   "USR-004": {}
 };
@@ -72,13 +80,13 @@ const cleanDefaultState = `const defaultState = {
     },
     {
       id: "USR-002",
-      name: "Gabriela",
-      email: "",
-      role: "admin",
-      function: "Administradora general",
+      name: "Recepcion",
+      email: "recepcion@chicnco.cr",
+      role: systemUserAuth["USR-002"]?.role || "recepcion",
+      function: systemUserAuth["USR-002"]?.function || "Recepcion y agenda",
       active: true,
-      passwordHash: fallbackPasswordHash,
-      permissions: rolePresets.admin.permissions
+      passwordHash: receptionPasswordHash,
+      permissions: systemUserAuth["USR-002"]?.permissions || rolePresets.recepcion.permissions
     },
     {
       id: "USR-003",
@@ -107,11 +115,19 @@ const cleanDefaultState = `const defaultState = {
 
 let app = readFileSync("app.js", "utf8");
 app = app.replace(new RegExp(`const ${legacyPasswordName}\\s*=\\s*"[a-f0-9]{64}";`, "i"), `const fallbackPasswordHash = "${passwordHash}";`);
+if (!app.includes("const receptionPasswordHash =")) {
+  app = app.replace(
+    `const fallbackPasswordHash = "${passwordHash}";`,
+    `const fallbackPasswordHash = "${passwordHash}";\nconst receptionPasswordHash = "${receptionPasswordHash}";`
+  );
+}
 app = app.replaceAll(legacyPasswordName, "fallbackPasswordHash");
 app = app.replace(/email:\s*"gaboarcegazel@outlook\.com"/g, 'email: ""');
 app = app.replace(/email:\s*"[^"]+@chicco\.local"/g, 'email: ""');
 app = app.replace(/passwordHash:\s*"[a-f0-9]{64}"/gi, "passwordHash: fallbackPasswordHash");
-if (!app.includes("const systemUserAuth =")) {
+if (app.includes("const systemUserAuth =")) {
+  app = replaceSection(app, "const systemUserAuth = {", "const branchDataKeys =", systemUserAuthBlock);
+} else {
   app = app.replace(/const allowedUserIds = \[[^\n]+\];\n/, (match) => `${match}${systemUserAuthBlock}`);
 }
 if (!app.includes("function emptyBranchData()")) {
