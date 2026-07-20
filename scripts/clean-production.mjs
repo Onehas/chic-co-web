@@ -113,6 +113,67 @@ const cleanDefaultState = `const defaultState = {
 
 `;
 
+const apiSessionHelpers = `function apiSessionToken() {
+  try {
+    return sessionStorage.getItem(apiSessionTokenKey) || localStorage.getItem(apiSessionTokenKey);
+  } catch (error) {
+    return localStorage.getItem(apiSessionTokenKey);
+  }
+}
+
+function saveApiSessionToken(token) {
+  if (!token) return;
+  try {
+    sessionStorage.setItem(apiSessionTokenKey, token);
+  } catch (error) {
+    localStorage.setItem(apiSessionTokenKey, token);
+  }
+}
+
+function clearApiSessionToken() {
+  try {
+    sessionStorage.removeItem(apiSessionTokenKey);
+    localStorage.removeItem(apiSessionTokenKey);
+  } catch (error) {
+    localStorage.removeItem(apiSessionTokenKey);
+  }
+}
+
+`;
+
+const hydrateBackendStateBlock = `async function hydrateBackendState() {
+  if (window.location.protocol === "file:" || !window.fetch) return false;
+
+  try {
+    const health = await backendRequest("/health", { cache: "no-store" });
+    backendAvailable = Boolean(health?.ok);
+    if (!backendAvailable) return false;
+
+    try {
+      const response = await backendRequest("/state", { cache: "no-store" });
+      if (response.state) {
+        state = normalizeStateSnapshot(response.state);
+        try {
+          localStorage.setItem(storageKey, JSON.stringify(state));
+        } catch (error) {
+          // El backend queda como fuente principal si el navegador bloquea localStorage.
+        }
+      } else {
+        await syncStateToBackend({ force: true });
+      }
+    } catch (error) {
+      if (error.status === 401) return true;
+      throw error;
+    }
+    return true;
+  } catch (error) {
+    backendAvailable = false;
+    return false;
+  }
+}
+
+`;
+
 let app = readFileSync("app.js", "utf8");
 app = app.replace(new RegExp(`const ${legacyPasswordName}\\s*=\\s*"[a-f0-9]{64}";`, "i"), `const fallbackPasswordHash = "${passwordHash}";`);
 if (!app.includes("const receptionPasswordHash =")) {
@@ -121,10 +182,34 @@ if (!app.includes("const receptionPasswordHash =")) {
     `const fallbackPasswordHash = "${passwordHash}";\nconst receptionPasswordHash = "${receptionPasswordHash}";`
   );
 }
+if (!app.includes("const apiSessionTokenKey =")) {
+  app = app.replace(
+    'const authSessionKey = "salonSuiteSessionUserId";',
+    'const authSessionKey = "salonSuiteSessionUserId";\nconst apiSessionTokenKey = "salonSuiteApiSessionToken";'
+  );
+}
 app = app.replaceAll(legacyPasswordName, "fallbackPasswordHash");
 app = app.replace(/email:\s*"gaboarcegazel@outlook\.com"/g, 'email: ""');
 app = app.replace(/email:\s*"[^"]+@chicco\.local"/g, 'email: ""');
 app = app.replace(/passwordHash:\s*"[a-f0-9]{64}"/gi, "passwordHash: fallbackPasswordHash");
+if (!app.includes("headers.Authorization = `Bearer ${token}`")) {
+  app = app.replace(
+    `  if (options.body && !headers["Content-Type"]) {
+    headers["Content-Type"] = "application/json";
+  }
+
+  const response = await fetch(apiPath(path), {`,
+    `  if (options.body && !headers["Content-Type"]) {
+    headers["Content-Type"] = "application/json";
+  }
+  const token = apiSessionToken();
+  if (token && !headers.Authorization) {
+    headers.Authorization = \`Bearer \${token}\`;
+  }
+
+  const response = await fetch(apiPath(path), {`
+  );
+}
 if (app.includes("const systemUserAuth =")) {
   app = replaceSection(app, "const systemUserAuth = {", "const branchDataKeys =", systemUserAuthBlock);
 } else {
@@ -134,6 +219,32 @@ if (!app.includes("function emptyBranchData()")) {
   app = app.replace("const defaultState = {", `${emptyBranchData}const defaultState = {`);
 }
 app = replaceSection(app, "const defaultState = {", "const moduleConfig = {", cleanDefaultState);
+app = replaceSection(app, "async function hydrateBackendState() {", "function scheduleBackendSync()", hydrateBackendStateBlock);
+if (!app.includes("function apiSessionToken()")) {
+  app = app.replace("\nfunction clearSessionUser() {", `\n${apiSessionHelpers}function clearSessionUser() {`);
+}
+if (!app.includes("clearApiSessionToken();")) {
+  app = app.replace(
+    `  } catch (error) {
+    localStorage.removeItem(authSessionKey);
+  }
+}`,
+    `  } catch (error) {
+    localStorage.removeItem(authSessionKey);
+  }
+  clearApiSessionToken();
+}`
+  );
+}
+if (!app.includes("saveApiSessionToken(backendLogin.token);")) {
+  app = app.replace(
+    `      const user = state.users.find((item) => item.id === backendLogin.userId) || backendLogin.user;
+      saveSessionUser(backendLogin.userId);`,
+    `      const user = state.users.find((item) => item.id === backendLogin.userId) || backendLogin.user;
+      saveApiSessionToken(backendLogin.token);
+      saveSessionUser(backendLogin.userId);`
+  );
+}
 app = app.replace(
   /function alajuelaBranchData\(\) \{[\s\S]*?\n\}\n\nfunction defaultBranches\(\)/,
   "function alajuelaBranchData() {\n  return emptyBranchData();\n}\n\nfunction defaultBranches()"
