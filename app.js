@@ -1,5 +1,6 @@
 const storageKey = "salonSuiteStateV2";
 const authSessionKey = "salonSuiteSessionUserId";
+const apiSessionTokenKey = "salonSuiteApiSessionToken";
 const fallbackPasswordHash = "d3ad9315b7be5dd53b31a273b3b3aba5defe700808305aa16a3062b76658a791";
 const receptionPasswordHash = "5813f24ae4432b277c8c92a78bf035caaa8f5a9ad0031441f5eccd2d4c0e2fd0";
 
@@ -474,6 +475,32 @@ function saveSessionUser(userId) {
   }
 }
 
+function apiSessionToken() {
+  try {
+    return sessionStorage.getItem(apiSessionTokenKey) || localStorage.getItem(apiSessionTokenKey);
+  } catch (error) {
+    return localStorage.getItem(apiSessionTokenKey);
+  }
+}
+
+function saveApiSessionToken(token) {
+  if (!token) return;
+  try {
+    sessionStorage.setItem(apiSessionTokenKey, token);
+  } catch (error) {
+    localStorage.setItem(apiSessionTokenKey, token);
+  }
+}
+
+function clearApiSessionToken() {
+  try {
+    sessionStorage.removeItem(apiSessionTokenKey);
+    localStorage.removeItem(apiSessionTokenKey);
+  } catch (error) {
+    localStorage.removeItem(apiSessionTokenKey);
+  }
+}
+
 function clearSessionUser() {
   try {
     sessionStorage.removeItem(authSessionKey);
@@ -481,6 +508,7 @@ function clearSessionUser() {
   } catch (error) {
     localStorage.removeItem(authSessionKey);
   }
+  clearApiSessionToken();
 }
 
 async function hashText(value) {
