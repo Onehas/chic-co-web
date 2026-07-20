@@ -1,6 +1,7 @@
 const storageKey = "salonSuiteStateV2";
 const authSessionKey = "salonSuiteSessionUserId";
 const fallbackPasswordHash = "d3ad9315b7be5dd53b31a273b3b3aba5defe700808305aa16a3062b76658a791";
+const receptionPasswordHash = "5813f24ae4432b277c8c92a78bf035caaa8f5a9ad0031441f5eccd2d4c0e2fd0";
 
 const permissionModules = ["clientes", "inventario", "procedimientos", "enCurso", "planes", "citas", "facturacion", "usuarios"];
 
@@ -71,7 +72,14 @@ const systemUserAuth = {
     function: "Super usuario",
     permissions: rolePresets.super.permissions
   },
-  "USR-002": {},
+  "USR-002": {
+    name: "Recepcion",
+    email: "recepcion@chicnco.cr",
+    role: "recepcion",
+    function: "Recepcion y agenda",
+    passwordHash: receptionPasswordHash,
+    permissions: rolePresets.recepcion.permissions
+  },
   "USR-003": {},
   "USR-004": {}
 };
@@ -154,13 +162,13 @@ const defaultState = {
     },
     {
       id: "USR-002",
-      name: "Gabriela",
-      email: "",
-      role: "admin",
-      function: "Administradora general",
+      name: "Recepcion",
+      email: "recepcion@chicnco.cr",
+      role: systemUserAuth["USR-002"]?.role || "recepcion",
+      function: systemUserAuth["USR-002"]?.function || "Recepcion y agenda",
       active: true,
-      passwordHash: fallbackPasswordHash,
-      permissions: rolePresets.admin.permissions
+      passwordHash: receptionPasswordHash,
+      permissions: systemUserAuth["USR-002"]?.permissions || rolePresets.recepcion.permissions
     },
     {
       id: "USR-003",
