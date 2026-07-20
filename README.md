@@ -32,6 +32,10 @@ http://127.0.0.1:4173
 
 El repositorio incluye `render.yaml` para desplegar la app completa como servicio Node en Render. El backend sirve la web y la API desde el mismo dominio, y en Render guarda los datos en Postgres usando `DATABASE_URL`.
 
+## Herramientas online
+
+El super usuario puede exportar respaldos, importar respaldos y descargar la bitacora de cambios desde la interfaz publicada.
+
 ## Nota importante
 
 La version online guarda los datos en Postgres y valida el login desde la API. El almacenamiento del navegador queda solo como apoyo de sesion y recuperacion visual.
