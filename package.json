@@ -4,8 +4,8 @@
   "private": true,
   "description": "App web Chic & Co con backend y datos online.",
   "scripts": {
-    "start": "node backend/server-phase3.js",
-    "dev": "node backend/server-phase3.js",
+    "start": "node backend/server-phase4.js",
+    "dev": "node backend/server-phase4.js",
     "test": "node scripts/test-security-policy.mjs"
   },
   "dependencies": {
