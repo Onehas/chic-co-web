@@ -16,7 +16,7 @@
     clients: {
       "CL-001": { name: "Maria Lopez" },
       "CL-002": { name: "Valeria Soto" },
-      "CL-003": { name: "Ana Rojas" },
+      "CL-003": { name: "Valeria Soto" },
       "CL-004": { name: "Karla Mena" },
       "CL-101": { name: "Lucia Fernandez" },
       "CL-102": { name: "Sofia Quesada" },
@@ -53,6 +53,8 @@
   let bridgeSaveInFlight = false;
   let bridgeSaveQueued = false;
   let bridgeLastSyncToast = 0;
+  let bridgeRealtimeEvents = null;
+  let bridgeRealtimeReconnectTimer = null;
 
   function apiRequestPath(path) {
     if (typeof apiPath === "function") return apiPath(path);
@@ -341,6 +343,83 @@
         scheduleBackendSync();
       }
     }
+  };
+
+  storeStateLocally = function () {
+    try {
+      syncCurrentBranchData();
+      localStorage.setItem(storageKey, JSON.stringify(state));
+    } catch (error) {
+      // El backend queda como fuente principal si este navegador bloquea localStorage.
+    }
+  };
+
+  refreshStateFromBackend = async function (options = {}) {
+    if (!isBackendAvailable() || !backendAuthToken()) return false;
+    if (bridgeSaveInFlight || bridgeSaveTimer) return false;
+
+    try {
+      const response = await backendRequest("/state", { cache: "no-store" });
+      if (response.state) {
+        adoptBackendState(response.state);
+        if (options.render && document.body.classList.contains("is-authenticated")) {
+          renderAll();
+        }
+        return true;
+      }
+    } catch (error) {
+      if (error.status === 401) {
+        disconnectRealtimeSync();
+        clearSessionUser();
+        showLogin("Sesion vencida. Ingrese de nuevo.");
+        return false;
+      }
+      setBackendAvailable(false);
+      disconnectRealtimeSync();
+    }
+    return false;
+  };
+
+  disconnectRealtimeSync = function () {
+    window.clearTimeout(bridgeRealtimeReconnectTimer);
+    bridgeRealtimeReconnectTimer = null;
+    if (bridgeRealtimeEvents) {
+      bridgeRealtimeEvents.close();
+      bridgeRealtimeEvents = null;
+    }
+  };
+
+  function scheduleRealtimeReconnect() {
+    if (bridgeRealtimeReconnectTimer || !backendAuthToken()) return;
+    bridgeRealtimeReconnectTimer = window.setTimeout(() => {
+      bridgeRealtimeReconnectTimer = null;
+      connectRealtimeSync();
+    }, 5000);
+  }
+
+  connectRealtimeSync = function () {
+    if (!isBackendAvailable() || !backendAuthToken() || !window.EventSource) return;
+
+    disconnectRealtimeSync();
+    const eventUrl = `${apiRequestPath("/events")}?token=${encodeURIComponent(backendAuthToken())}`;
+    const source = new EventSource(eventUrl);
+    bridgeRealtimeEvents = source;
+
+    source.addEventListener("connected", () => {
+      setBackendAvailable(true);
+    });
+
+    source.addEventListener("state-updated", () => {
+      refreshStateFromBackend({ render: true });
+    });
+
+    source.onerror = () => {
+      if (bridgeRealtimeEvents === source) {
+        source.close();
+        bridgeRealtimeEvents = null;
+      }
+      scheduleRealtimeReconnect();
+    };
   };
 
   const originalSaveState = typeof saveState === "function" ? saveState : null;
