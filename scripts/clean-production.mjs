@@ -152,12 +152,7 @@ const hydrateBackendStateBlock = `async function hydrateBackendState() {
     try {
       const response = await backendRequest("/state", { cache: "no-store" });
       if (response.state) {
-        state = normalizeStateSnapshot(response.state);
-        try {
-          localStorage.setItem(storageKey, JSON.stringify(state));
-        } catch (error) {
-          // El backend queda como fuente principal si el navegador bloquea localStorage.
-        }
+        applyRemoteStateSnapshot(response.state);
       } else {
         await syncStateToBackend({ force: true });
       }
@@ -174,6 +169,124 @@ const hydrateBackendStateBlock = `async function hydrateBackendState() {
 
 `;
 
+const remoteStateHelpers = `function storeStateLocally() {
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(state));
+  } catch (error) {
+    // El backend queda como fuente principal si el navegador bloquea localStorage.
+  }
+}
+
+function applyRemoteStateSnapshot(snapshot, options = {}) {
+  const localUserId = state.currentUserId;
+  const localBranchId = state.currentBranchId;
+  const nextState = normalizeStateSnapshot(snapshot);
+
+  if (nextState.users.some((user) => user.id === localUserId && user.active)) {
+    nextState.currentUserId = localUserId;
+  }
+  if (branchOptions.some((branch) => branch.id === localBranchId)) {
+    nextState.currentBranchId = localBranchId;
+    writeBranchData(nextState, nextState.branches[nextState.currentBranchId]);
+  }
+
+  state = nextState;
+  if (!canView(currentModule)) {
+    currentModule = firstAllowedModule();
+  }
+  storeStateLocally();
+  if (options.render) {
+    renderAll();
+  }
+}
+
+`;
+
+const realtimeSyncHelpers = `async function refreshStateFromBackend(options = {}) {
+  if (!backendAvailable || window.location.protocol === "file:") return false;
+  if (backendSaveInFlight || backendSaveTimer) {
+    remoteRefreshQueued = true;
+    return false;
+  }
+  if (remoteRefreshInFlight) {
+    remoteRefreshQueued = true;
+    return false;
+  }
+
+  remoteRefreshInFlight = true;
+  try {
+    const response = await backendRequest("/state", { cache: "no-store" });
+    if (response.state) {
+      applyRemoteStateSnapshot(response.state, {
+        render: options.render ?? document.body.classList.contains("is-authenticated")
+      });
+      return true;
+    }
+  } catch (error) {
+    if (error.status === 401) {
+      disconnectRealtimeSync();
+      clearSessionUser();
+      showLogin("Sesion vencida. Inicia sesion de nuevo.");
+      return false;
+    }
+    backendAvailable = false;
+    disconnectRealtimeSync();
+  } finally {
+    remoteRefreshInFlight = false;
+    if (remoteRefreshQueued) {
+      remoteRefreshQueued = false;
+      window.setTimeout(() => refreshStateFromBackend({ render: true }), 250);
+    }
+  }
+  return false;
+}
+
+function disconnectRealtimeSync() {
+  window.clearTimeout(realtimeReconnectTimer);
+  realtimeReconnectTimer = null;
+  if (realtimeEvents) {
+    realtimeEvents.close();
+    realtimeEvents = null;
+  }
+}
+
+function scheduleRealtimeReconnect() {
+  if (realtimeReconnectTimer || !apiSessionToken()) return;
+  realtimeReconnectTimer = window.setTimeout(() => {
+    realtimeReconnectTimer = null;
+    connectRealtimeSync();
+  }, 5000);
+}
+
+function connectRealtimeSync() {
+  if (!backendAvailable || window.location.protocol === "file:" || !window.EventSource) return;
+  const token = apiSessionToken();
+  if (!token) return;
+
+  disconnectRealtimeSync();
+  const eventUrl = \`\${apiPath("/events")}?token=\${encodeURIComponent(token)}\`;
+  const source = new EventSource(eventUrl);
+  realtimeEvents = source;
+
+  source.addEventListener("connected", () => {
+    backendAvailable = true;
+  });
+
+  source.addEventListener("state-updated", () => {
+    refreshStateFromBackend({ render: true });
+  });
+
+  source.onerror = () => {
+    if (realtimeEvents === source) {
+      source.close();
+      realtimeEvents = null;
+    }
+    scheduleRealtimeReconnect();
+  };
+}
+
+`;
+
 let app = readFileSync("app.js", "utf8");
 app = app.replace(new RegExp(`const ${legacyPasswordName}\\s*=\\s*"[a-f0-9]{64}";`, "i"), `const fallbackPasswordHash = "${passwordHash}";`);
 if (!app.includes("const receptionPasswordHash =")) {
@@ -186,6 +299,12 @@ if (!app.includes("const apiSessionTokenKey =")) {
   app = app.replace(
     'const authSessionKey = "salonSuiteSessionUserId";',
     'const authSessionKey = "salonSuiteSessionUserId";\nconst apiSessionTokenKey = "salonSuiteApiSessionToken";'
+  );
+}
+if (!app.includes("let realtimeEvents =")) {
+  app = app.replace(
+    "let backendSaveQueued = false;",
+    "let backendSaveQueued = false;\nlet realtimeEvents = null;\nlet realtimeReconnectTimer = null;\nlet remoteRefreshInFlight = false;\nlet remoteRefreshQueued = false;"
   );
 }
 app = app.replaceAll(legacyPasswordName, "fallbackPasswordHash");
@@ -219,7 +338,32 @@ if (!app.includes("function emptyBranchData()")) {
   app = app.replace("const defaultState = {", `${emptyBranchData}const defaultState = {`);
 }
 app = replaceSection(app, "const defaultState = {", "const moduleConfig = {", cleanDefaultState);
+if (!app.includes("function storeStateLocally()")) {
+  app = app.replace("\nasync function hydrateBackendState() {", `\n${remoteStateHelpers}async function hydrateBackendState() {`);
+}
 app = replaceSection(app, "async function hydrateBackendState() {", "function scheduleBackendSync()", hydrateBackendStateBlock);
+if (!app.includes("function refreshStateFromBackend(")) {
+  app = app.replace("\nfunction scheduleBackendSync() {", `\n${realtimeSyncHelpers}function scheduleBackendSync() {`);
+}
+if (!app.includes("} else if (remoteRefreshQueued)")) {
+  app = app.replace(
+    `    if (backendSaveQueued) {
+      backendSaveQueued = false;
+      scheduleBackendSync();
+    }
+  }
+}`,
+    `    if (backendSaveQueued) {
+      backendSaveQueued = false;
+      scheduleBackendSync();
+    } else if (remoteRefreshQueued) {
+      remoteRefreshQueued = false;
+      refreshStateFromBackend({ render: true });
+    }
+  }
+}`
+  );
+}
 if (!app.includes("function apiSessionToken()")) {
   app = app.replace("\nfunction clearSessionUser() {", `\n${apiSessionHelpers}function clearSessionUser() {`);
 }
@@ -236,6 +380,12 @@ if (!app.includes("clearApiSessionToken();")) {
 }`
   );
 }
+if (!app.includes("disconnectRealtimeSync();\n  try {\n    sessionStorage.removeItem(authSessionKey);")) {
+  app = app.replace(
+    "function clearSessionUser() {\n  try {",
+    "function clearSessionUser() {\n  disconnectRealtimeSync();\n  try {"
+  );
+}
 if (!app.includes("saveApiSessionToken(backendLogin.token);")) {
   app = app.replace(
     `      const user = state.users.find((item) => item.id === backendLogin.userId) || backendLogin.user;
@@ -245,6 +395,27 @@ if (!app.includes("saveApiSessionToken(backendLogin.token);")) {
       saveSessionUser(backendLogin.userId);`
   );
 }
+app = app.replace(
+  `function showApp(userId) {
+  state.currentUserId = userId;
+  saveState();`,
+  `function showApp(userId) {
+  state.currentUserId = userId;
+  storeStateLocally();`
+);
+if (!app.includes("connectRealtimeSync();\n  setModule(currentModule, { silent: true });")) {
+  app = app.replace(
+    `  currentModule = canView("clientes") ? "clientes" : firstAllowedModule();
+  setModule(currentModule, { silent: true });`,
+    `  currentModule = canView("clientes") ? "clientes" : firstAllowedModule();
+  connectRealtimeSync();
+  setModule(currentModule, { silent: true });`
+  );
+}
+app = app.replace(
+  /(\n  if \(!canView\(currentModule\)\) \{\n    currentModule = firstAllowedModule\(\);\n  \}\n)  saveState\(\);\n  renderAll\(\);/g,
+  "$1  storeStateLocally();\n  renderAll();"
+);
 app = app.replace(
   /function alajuelaBranchData\(\) \{[\s\S]*?\n\}\n\nfunction defaultBranches\(\)/,
   "function alajuelaBranchData() {\n  return emptyBranchData();\n}\n\nfunction defaultBranches()"
