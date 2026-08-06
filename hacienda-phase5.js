@@ -198,7 +198,7 @@
     if (result) result.innerHTML = html;
   }
 
-  async function loadDocuments() {
+  async function loadDocuments(renderList = true) {
     if (loading || !canManageHacienda()) return;
     loading = true;
     try {
@@ -207,7 +207,7 @@
       loadedBranchId = activeBranchId();
       const panel = document.getElementById("haciendaPhase5Panel");
       if (panel) panel.outerHTML = renderPanel();
-      setResult(renderDocumentsList());
+      if (renderList) setResult(renderDocumentsList());
     } catch (error) {
       documents = [];
       setResult(safeEscape(error.message || "No se pudieron cargar documentos fiscales."));
@@ -225,8 +225,8 @@
       body: JSON.stringify({ documentId })
     });
     selectedCheck = result.check || null;
+    await loadDocuments(false);
     setResult(renderCheck(selectedCheck));
-    await loadDocuments();
   }
 
   async function saveSignedXml() {
@@ -239,10 +239,10 @@
       body: JSON.stringify({ documentId, signedXml })
     });
     selectedCheck = result.check || null;
-    setResult(renderCheck(selectedCheck));
     const textarea = document.querySelector("[data-hacienda-phase5-signed-xml]");
     if (textarea) textarea.value = "";
-    await loadDocuments();
+    await loadDocuments(false);
+    setResult(renderCheck(selectedCheck));
     if (typeof showToast === "function") showToast("XML firmado guardado");
   }
 
@@ -255,6 +255,7 @@
       body: JSON.stringify({ documentId })
     });
     const submission = result.submission || {};
+    await loadDocuments(false);
     setResult(`
       <div class="hacienda-phase5-summary">
         <span class="hacienda-badge is-ok">Listo para envio</span>
@@ -271,7 +272,6 @@
         </div>
       </div>
     `);
-    await loadDocuments();
     if (typeof showToast === "function") showToast("Paquete fiscal preparado");
   }
 
