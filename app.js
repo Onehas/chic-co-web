@@ -453,7 +453,7 @@ function switchBranch(branchId) {
   if (!canView(currentModule)) {
     currentModule = firstAllowedModule();
   }
-  saveState();
+  storeStateLocally();
   renderAll();
   closeDropdown();
   showToast(`Sucursal activa: ${nextBranch.label}`);
@@ -502,6 +502,7 @@ function clearApiSessionToken() {
 }
 
 function clearSessionUser() {
+  disconnectRealtimeSync();
   try {
     sessionStorage.removeItem(authSessionKey);
     localStorage.removeItem(authSessionKey);
@@ -536,10 +537,11 @@ function showLogin(message = "") {
 
 function showApp(userId) {
   state.currentUserId = userId;
-  saveState();
+  storeStateLocally();
   document.body.classList.remove("is-login");
   document.body.classList.add("is-authenticated");
   currentModule = canView("clientes") ? "clientes" : firstAllowedModule();
+  connectRealtimeSync();
   setModule(currentModule, { silent: true });
 }
 
@@ -2211,7 +2213,7 @@ function switchUser(userId) {
   if (!canView(currentModule)) {
     currentModule = firstAllowedModule();
   }
-  saveState();
+  storeStateLocally();
   renderAll();
   closeDropdown();
   showToast(`Usuario activo: ${user.name}`);
