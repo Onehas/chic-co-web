@@ -19,6 +19,8 @@ let pgPool = null;
 let pgReady = false;
 const sessions = new Map();
 const loginAttempts = new Map();
+const realtimeClients = new Map();
+let realtimeRevision = 0;
 const receptionPasswordHash = "5813f24ae4432b277c8c92a78bf035caaa8f5a9ad0031441f5eccd2d4c0e2fd0";
 
 const superPermissionModules = ["clientes", "inventario", "procedimientos", "enCurso", "planes", "citas", "facturacion", "usuarios"];
@@ -192,12 +194,9 @@ function createSession(user, req) {
   return { token, expiresAt };
 }
 
-function sessionFromRequest(req) {
-  const authorization = String(req.headers.authorization || "");
-  const match = authorization.match(/^Bearer\s+(.+)$/i);
-  if (!match) return null;
-
-  const token = match[1].trim();
+function sessionFromToken(token) {
+  token = String(token || "").trim();
+  if (!token) return null;
   const session = sessions.get(token);
   if (!session || session.expiresAt <= Date.now()) {
     sessions.delete(token);
@@ -205,6 +204,69 @@ function sessionFromRequest(req) {
   }
 
   return { token, ...session };
+}
+
+function sessionFromRequest(req) {
+  const authorization = String(req.headers.authorization || "");
+  const match = authorization.match(/^Bearer\s+(.+)$/i);
+  return match ? sessionFromToken(match[1]) : null;
+}
+
+function sessionFromQuery(url) {
+  return sessionFromToken(url.searchParams.get("token"));
+}
+
+function sendRealtimeEvent(res, eventName, payload) {
+  res.write(`event: ${eventName}\n`);
+  res.write(`data: ${JSON.stringify(payload)}\n\n`);
+}
+
+function broadcastStateUpdated(session, collections = []) {
+  realtimeRevision += 1;
+  const payload = {
+    revision: realtimeRevision,
+    at: new Date().toISOString(),
+    userId: session?.userId || "",
+    collections
+  };
+
+  realtimeClients.forEach((client, clientId) => {
+    try {
+      sendRealtimeEvent(client.res, "state-updated", payload);
+    } catch (error) {
+      clearInterval(client.heartbeat);
+      realtimeClients.delete(clientId);
+    }
+  });
+}
+
+function handleRealtimeEvents(req, res, session) {
+  setBaseHeaders(req, res);
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-store, no-transform",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no"
+  });
+  if (typeof res.flushHeaders === "function") res.flushHeaders();
+
+  const clientId = crypto.randomUUID();
+  const heartbeat = setInterval(() => {
+    if (res.destroyed) {
+      clearInterval(heartbeat);
+      realtimeClients.delete(clientId);
+      return;
+    }
+    res.write(`: keepalive ${Date.now()}\n\n`);
+  }, 25000);
+
+  realtimeClients.set(clientId, { res, heartbeat, userId: session.userId });
+  sendRealtimeEvent(res, "connected", { ok: true, revision: realtimeRevision });
+
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    realtimeClients.delete(clientId);
+  });
 }
 
 function stripSensitiveState(state) {
@@ -495,8 +557,6 @@ async function handleLogin(req, res) {
   }
 
   clearFailedLogins(req, email);
-  state.currentUserId = user.id;
-  await writeState(state);
   const session = createSession(user, req);
   sendJson(req, res, 200, {
     ok: true,
@@ -507,7 +567,8 @@ async function handleLogin(req, res) {
   });
 }
 
-async function handleApi(req, res, pathname) {
+async function handleApi(req, res, url) {
+  const pathname = url.pathname;
   if (!isAllowedOrigin(req)) {
     sendError(req, res, 403, "Origen no permitido.");
     return;
@@ -530,9 +591,14 @@ async function handleApi(req, res, pathname) {
     return;
   }
 
-  const session = sessionFromRequest(req);
+  const session = sessionFromRequest(req) || sessionFromQuery(url);
   if (!session) {
     sendError(req, res, 401, "Sesion requerida.");
+    return;
+  }
+
+  if (pathname === "/api/events" && req.method === "GET") {
+    handleRealtimeEvents(req, res, session);
     return;
   }
 
@@ -569,8 +635,10 @@ async function handleApi(req, res, pathname) {
     }
 
     const restoredState = preserveProtectedState(nextState, currentState);
-    addAuditEntry(restoredState, user, "backup.restore", changedCollections(restoredState, currentState));
+    const collections = changedCollections(restoredState, currentState);
+    addAuditEntry(restoredState, user, "backup.restore", collections);
     await writeState(restoredState);
+    broadcastStateUpdated(session, collections);
     sendJson(req, res, 200, { ok: true });
     return;
   }
@@ -603,7 +671,9 @@ async function handleApi(req, res, pathname) {
       sendError(req, res, error.statusCode || 403, error.message || "No tiene permiso para guardar esos cambios.");
       return;
     }
+    const collections = changedCollections(writableState, currentState);
     await writeState(writableState);
+    broadcastStateUpdated(session, collections);
     sendJson(req, res, 200, { ok: true });
     return;
   }
@@ -688,7 +758,7 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
 
     if (url.pathname.startsWith("/api/")) {
-      await handleApi(req, res, url.pathname);
+      await handleApi(req, res, url);
       return;
     }
 
