@@ -3,5 +3,12 @@
 node_modules/
 cloudflared.exe
 backend/data/*.json
+*.p12
+*.pfx
+*.pem
+*.key
+*.crt
+*.cer
+hacienda-secrets/
 Thumbs.db
 .DS_Store
