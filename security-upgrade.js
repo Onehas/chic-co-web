@@ -16,7 +16,7 @@
     clients: {
       "CL-001": { name: "Maria Lopez" },
       "CL-002": { name: "Valeria Soto" },
-      "CL-003": { name: "Valeria Soto" },
+      "CL-003": { name: "Ana Rojas" },
       "CL-004": { name: "Karla Mena" },
       "CL-101": { name: "Lucia Fernandez" },
       "CL-102": { name: "Sofia Quesada" },
