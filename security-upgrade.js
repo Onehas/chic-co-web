@@ -422,6 +422,63 @@
     };
   };
 
+  function parseMoneyInput(value) {
+    const normalized = String(value || "").trim().replace(/[^\d.,]/g, "");
+    if (!normalized) return NaN;
+
+    const commaIndex = normalized.lastIndexOf(",");
+    const dotIndex = normalized.lastIndexOf(".");
+    let numberText = normalized;
+
+    if (commaIndex >= 0 && dotIndex >= 0) {
+      if (commaIndex > dotIndex) {
+        numberText = normalized.replace(/\./g, "").replace(",", ".");
+      } else {
+        numberText = normalized.replace(/,/g, "");
+      }
+    } else if (commaIndex >= 0) {
+      const cents = normalized.slice(commaIndex + 1);
+      numberText = cents.length === 3 ? normalized.replace(/,/g, "") : normalized.replace(",", ".");
+    } else if (dotIndex >= 0) {
+      const cents = normalized.slice(dotIndex + 1);
+      if (cents.length === 3) {
+        numberText = normalized.replace(/\./g, "");
+      }
+    }
+
+    return Math.round(Number(numberText));
+  }
+
+  registerPlanPayment = function (planId) {
+    const plan = state.plans.find((item) => item.id === planId);
+    if (!plan) return;
+
+    const pending = Math.max(0, Number(plan.total || 0) - Number(plan.paid || 0));
+    if (pending <= 0) {
+      showToast("El plan ya esta pagado");
+      return;
+    }
+
+    const answer = window.prompt(
+      `Monto del abono para ${plan.title}\nPendiente: ${money(pending)}`,
+      ""
+    );
+    if (answer === null) return;
+
+    const payment = parseMoneyInput(answer);
+    if (!Number.isFinite(payment) || payment <= 0) {
+      showToast("Ingrese un monto de abono valido");
+      return;
+    }
+    if (payment > pending) {
+      showToast(`El abono maximo es ${money(pending)}`);
+      return;
+    }
+
+    plan.paid = Number(plan.paid || 0) + payment;
+    persistAndRender(`Abono registrado: ${money(payment)}`);
+  };
+
   const originalSaveState = typeof saveState === "function" ? saveState : null;
   if (originalSaveState && !window.__chicBackendSaveBridge) {
     window.__chicBackendSaveBridge = true;
