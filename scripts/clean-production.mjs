@@ -16,6 +16,7 @@ function replaceSection(source, startMarker, endMarker, replacement) {
 
 const passwordHash = "d3ad9315b7be5dd53b31a273b3b3aba5defe700808305aa16a3062b76658a791";
 const receptionPasswordHash = "5813f24ae4432b277c8c92a78bf035caaa8f5a9ad0031441f5eccd2d4c0e2fd0";
+const monicaPasswordHash = "e7d081ee45073bc0da9fd633a609db90be0adc2abac6ac47e79e375544e81c22";
 const legacyPrefix = ["de", "mo"].join("");
 const legacyPasswordName = `${legacyPrefix}PasswordHash`;
 const legacyResetMessage = ["Datos", legacyPrefix, "reiniciados"].join(" ");
@@ -57,7 +58,14 @@ const systemUserAuthBlock = `const systemUserAuth = {
     passwordHash: receptionPasswordHash,
     permissions: rolePresets.recepcion.permissions
   },
-  "USR-003": {},
+  "USR-003": {
+    name: "Monica",
+    email: "mgazel@mgjobs.net",
+    role: "recepcion",
+    function: "Recepcion y agenda",
+    passwordHash: monicaPasswordHash,
+    permissions: rolePresets.recepcion.permissions
+  },
   "USR-004": {}
 };
 `;
@@ -90,13 +98,13 @@ const cleanDefaultState = `const defaultState = {
     },
     {
       id: "USR-003",
-      name: "Paola",
-      email: "",
-      role: "recepcion",
-      function: "Recepcion y agenda",
+      name: "Monica",
+      email: "mgazel@mgjobs.net",
+      role: systemUserAuth["USR-003"]?.role || "recepcion",
+      function: systemUserAuth["USR-003"]?.function || "Recepcion y agenda",
       active: true,
-      passwordHash: fallbackPasswordHash,
-      permissions: rolePresets.recepcion.permissions
+      passwordHash: monicaPasswordHash,
+      permissions: systemUserAuth["USR-003"]?.permissions || rolePresets.recepcion.permissions
     },
     {
       id: "USR-004",
@@ -288,11 +296,17 @@ function connectRealtimeSync() {
 `;
 
 let app = readFileSync("app.js", "utf8");
-app = app.replace(new RegExp(`const ${legacyPasswordName}\\s*=\\s*"[a-f0-9]{64}";`, "i"), `const fallbackPasswordHash = "${passwordHash}";`);
+app = app.replace(new RegExp(`const ${legacyPasswordName}\\\\s*=\\\\s*"[a-f0-9]{64}";`, "i"), `const fallbackPasswordHash = "${passwordHash}";`);
 if (!app.includes("const receptionPasswordHash =")) {
   app = app.replace(
     `const fallbackPasswordHash = "${passwordHash}";`,
     `const fallbackPasswordHash = "${passwordHash}";\nconst receptionPasswordHash = "${receptionPasswordHash}";`
+  );
+}
+if (!app.includes("const monicaPasswordHash =")) {
+  app = app.replace(
+    `const receptionPasswordHash = "${receptionPasswordHash}";`,
+    `const receptionPasswordHash = "${receptionPasswordHash}";\nconst monicaPasswordHash = "${monicaPasswordHash}";`
   );
 }
 if (!app.includes("const apiSessionTokenKey =")) {
@@ -421,7 +435,7 @@ app = app.replace(
   "function alajuelaBranchData() {\n  return emptyBranchData();\n}\n\nfunction defaultBranches()"
 );
 app = app.replace(
-  new RegExp(`\\nelements\\.resetDataButton\\.addEventListener\\("click", \\(\\) => \\{[\\s\\S]*?showToast\\("${legacyResetMessage}"\\);\\n\\}\\);\\n`, "g"),
+  new RegExp(`\\nelements\\\\.resetDataButton\\\\.addEventListener\\\\("click", \\\\(\\\\) => \\\\{[\\\\s\\\\S]*?showToast\\\\("${legacyResetMessage}"\\\\);\\\\n\\\\}\\\\);\\\\n`, "g"),
   "\n"
 );
 app = app.replace(`${legacyLocalAccessMessage}.`, "No se pudo validar el acceso.");
@@ -431,11 +445,43 @@ writeIfChanged("app.js", app);
 
 let html = readFileSync("index.html", "utf8");
 html = html.replace(
-  new RegExp(`<button class="secondary-action" type="button" id="resetDataButton">${legacyResetButtonText}<\\/button>`, "g"),
+  new RegExp(`<button class="secondary-action" type="button" id="resetDataButton">${legacyResetButtonText}<\\\\/button>`, "g"),
   '<button class="secondary-action" type="button" id="resetDataButton" hidden aria-hidden="true" tabindex="-1"></button>'
 );
+if (!html.includes("hacienda.js")) {
+  html = html.replace(
+    '<script src="production-tools.js"></script>',
+    '<script src="production-tools.js"></script>\n    <script src="hacienda.js"></script>'
+  );
+}
 writeIfChanged("index.html", html);
 
 let server = readFileSync("backend/server.js", "utf8");
 server = server.replace(`passwordHash: ${legacyPasswordName}`, "passwordHash: fallbackPasswordHash");
+if (!server.includes("const monicaPasswordHash =")) {
+  server = server.replace(
+    `const receptionPasswordHash = "${receptionPasswordHash}";`,
+    `const receptionPasswordHash = "${receptionPasswordHash}";\nconst monicaPasswordHash = "${monicaPasswordHash}";`
+  );
+}
+server = server.replace(
+  `  "USR-003": {},`,
+  `  "USR-003": {
+    name: "Monica",
+    email: "mgazel@mgjobs.net",
+    role: "recepcion",
+    function: "Recepcion y agenda",
+    passwordHash: monicaPasswordHash,
+    permissions: {
+      clientes: { read: true, write: true },
+      inventario: { read: false, write: false },
+      procedimientos: { read: false, write: false },
+      enCurso: { read: true, write: false },
+      planes: { read: true, write: false },
+      citas: { read: true, write: true },
+      facturacion: { read: true, write: true },
+      usuarios: { read: false, write: false }
+    }
+  },`
+);
 writeIfChanged("backend/server.js", server);
