@@ -12,6 +12,29 @@
   const backendTokenKey = "salonSuiteBackendToken";
   const pendingSyncKey = "salonSuitePendingOnlineSync";
   const inventoryCategoryOptions = ["General", "Cabello", "Facial", "Venta"];
+  const realSpecialistsByBranch = {
+    rohrmoser: [
+      { name: "Jean Carlo Ramirez Esquivel", focus: "Rohrmoser" },
+      { name: "Jose Eduardo Cascante", focus: "Rohrmoser" },
+      { name: "Yamileth Romero Rodriguez", focus: "Rohrmoser" },
+      { name: "Xinia Villasenor Ramirez", focus: "Rohrmoser" },
+      { name: "Irma Castillo Cantillo", focus: "Rohrmoser" },
+      { name: "Juan Carlos Selva Quesada", focus: "Rohrmoser" },
+      { name: "Ruth Bojorge Sobrado", focus: "Rohrmoser" },
+      { name: "Giovanna Chinchilla Zuniga", focus: "Rohrmoser" }
+    ],
+    alajuela: [
+      { name: "Francinne Bermudez", focus: "Alajuela" },
+      { name: "Jennifer Cruz Moreira", focus: "Alajuela" },
+      { name: "Zamora Solis Tarcia Xiomara", focus: "Alajuela" },
+      { name: "Andrea Guzman Sanchez", focus: "Alajuela" },
+      { name: "Largaespada Castillo Maria Lidia", focus: "Alajuela" },
+      { name: "Barrantes Suarez Roxina Maria", focus: "Alajuela" },
+      { name: "Natalli Zamora Mora", focus: "Alajuela" },
+      { name: "Kiara Picado Mendoza", focus: "Alajuela" }
+    ]
+  };
+  const legacySpecialistDefaults = new Set(["Andrea Morales"]);
   const seedRecordFingerprints = {
     clients: {
       "CL-001": { name: "Maria Lopez" },
@@ -125,6 +148,94 @@
       .map((category) => `<option value="${escapeOptionValue(category)}">${escapeOptionValue(category)}</option>`)
       .join("");
     select.value = selectedValue;
+  }
+
+  function activeBranchId() {
+    try {
+      return state?.currentBranchId || "rohrmoser";
+    } catch (error) {
+      return "rohrmoser";
+    }
+  }
+
+  function branchSpecialistList() {
+    const specialists = realSpecialistsByBranch[activeBranchId()] || realSpecialistsByBranch.rohrmoser;
+    return specialists.map((specialist) => ({ ...specialist }));
+  }
+
+  function namesMatch(left, right) {
+    if (typeof normalize === "function") return normalize(left) === normalize(right);
+    return String(left || "").trim().toLowerCase() === String(right || "").trim().toLowerCase();
+  }
+
+  function applyBranchSpecialists() {
+    if (!Array.isArray(procedureSpecialists)) return;
+    const specialists = branchSpecialistList();
+    procedureSpecialists.splice(0, procedureSpecialists.length, ...specialists);
+  }
+
+  function refreshBranchSpecialistLabels() {
+    const count = branchSpecialistList().length;
+    document.querySelectorAll(".agenda-availability .agenda-today-head span").forEach((label) => {
+      if (/personas\s*\|\s*cupos/i.test(label.textContent || "")) {
+        label.textContent = `${count} personas | cupos de 60 mins`;
+      }
+    });
+    document.querySelectorAll(".agenda-team-head strong").forEach((label) => {
+      if (/especialistas/i.test(label.textContent || "")) {
+        label.textContent = `${count} especialistas`;
+      }
+    });
+  }
+
+  function applyBranchSpecialistOptions() {
+    if (typeof specialistOptions === "function") {
+      specialistOptions = function (selected = "") {
+        const specialists = branchSpecialistList();
+        const selectedExists = specialists.some((specialist) => namesMatch(specialist.name, selected));
+        const keepSavedSpecialist = selected && !selectedExists && !legacySpecialistDefaults.has(selected);
+        const savedSpecialist = keepSavedSpecialist ? [{ name: selected, focus: "Agenda" }] : [];
+        const selectedName = selectedExists ? selected : specialists[0]?.name || selected || "";
+
+        return [...savedSpecialist, ...specialists].map((specialist) => ({
+          value: specialist.name,
+          label: specialist.name,
+          selected: namesMatch(specialist.name, selectedName)
+        }));
+      };
+    }
+
+    if (typeof moduleMetrics === "function" && !window.__chicBranchSpecialistMetrics) {
+      window.__chicBranchSpecialistMetrics = true;
+      const originalModuleMetrics = moduleMetrics;
+      moduleMetrics = function (moduleName) {
+        const metrics = originalModuleMetrics(moduleName);
+        if (moduleName === "citas" && Array.isArray(metrics) && metrics[2]) {
+          metrics[2] = [branchSpecialistList().length, "Especialistas"];
+        }
+        return metrics;
+      };
+    }
+  }
+
+  function wrapRenderForBranchSpecialists(functionName) {
+    const originalRender = typeof window[functionName] === "function" ? window[functionName] : null;
+    if (!originalRender || originalRender.__chicBranchSpecialistWrapped) return;
+
+    window[functionName] = function (...args) {
+      applyBranchSpecialists();
+      const result = originalRender.apply(this, args);
+      refreshBranchSpecialistLabels();
+      return result;
+    };
+    window[functionName].__chicBranchSpecialistWrapped = true;
+  }
+
+  function bootBranchSpecialists() {
+    applyBranchSpecialists();
+    applyBranchSpecialistOptions();
+    ["renderView", "renderAll", "setModule"].forEach(wrapRenderForBranchSpecialists);
+    refreshBranchSpecialistLabels();
   }
 
   function wrapRenderForInventoryCategories(functionName) {
@@ -562,6 +673,12 @@
     window.__chicInventoryCategoryGuard = true;
     ["renderView", "renderAll", "setModule"].forEach(wrapRenderForInventoryCategories);
     window.setTimeout(applyInventoryCategoryOptions, 0);
+  }
+
+  if (!window.__chicBranchSpecialists) {
+    window.__chicBranchSpecialists = true;
+    bootBranchSpecialists();
+    window.setTimeout(bootBranchSpecialists, 0);
   }
 
   document.addEventListener(
