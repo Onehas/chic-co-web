@@ -3,6 +3,7 @@ const authSessionKey = "salonSuiteSessionUserId";
 const apiSessionTokenKey = "salonSuiteApiSessionToken";
 const fallbackPasswordHash = "d3ad9315b7be5dd53b31a273b3b3aba5defe700808305aa16a3062b76658a791";
 const receptionPasswordHash = "5813f24ae4432b277c8c92a78bf035caaa8f5a9ad0031441f5eccd2d4c0e2fd0";
+const monicaPasswordHash = "e7d081ee45073bc0da9fd633a609db90be0adc2abac6ac47e79e375544e81c22";
 
 const permissionModules = ["clientes", "inventario", "procedimientos", "enCurso", "planes", "citas", "facturacion", "usuarios"];
 
@@ -81,7 +82,14 @@ const systemUserAuth = {
     passwordHash: receptionPasswordHash,
     permissions: rolePresets.recepcion.permissions
   },
-  "USR-003": {},
+  "USR-003": {
+    name: "Monica",
+    email: "mgazel@mgjobs.net",
+    role: "recepcion",
+    function: "Recepcion y agenda",
+    passwordHash: monicaPasswordHash,
+    permissions: rolePresets.recepcion.permissions
+  },
   "USR-004": {}
 };
 const branchDataKeys = ["clients", "products", "procedures", "activeProcedures", "plans", "appointments", "invoices", "stockMovements"];
@@ -173,13 +181,13 @@ const defaultState = {
     },
     {
       id: "USR-003",
-      name: "Paola",
-      email: "",
-      role: "recepcion",
-      function: "Recepcion y agenda",
+      name: "Monica",
+      email: "mgazel@mgjobs.net",
+      role: systemUserAuth["USR-003"]?.role || "recepcion",
+      function: systemUserAuth["USR-003"]?.function || "Recepcion y agenda",
       active: true,
-      passwordHash: fallbackPasswordHash,
-      permissions: rolePresets.recepcion.permissions
+      passwordHash: monicaPasswordHash,
+      permissions: systemUserAuth["USR-003"]?.permissions || rolePresets.recepcion.permissions
     },
     {
       id: "USR-004",
