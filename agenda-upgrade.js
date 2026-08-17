@@ -2,9 +2,10 @@
   if (window.__chicAgendaUpgrade || typeof viewRenderers === "undefined") return;
   window.__chicAgendaUpgrade = true;
 
-  const dayStart = 8 * 60;
+  const dayStart = 8 * 60 + 30;
   const dayEnd = 19 * 60;
   const slotStep = 30;
+  const activeStatuses = ["Pendiente", "Confirmada", "En curso"];
   const closedStatuses = ["Atendida", "Cancelada"];
 
   function text(value = "") {
@@ -59,7 +60,7 @@
     });
   }
 
-  function availableSlots(day, specialist, duration = 60) {
+  function slotStates(day, specialist, duration = 60) {
     const slots = [];
     for (let start = dayStart; start + Number(duration) <= dayEnd; start += slotStep) {
       const candidate = {
@@ -68,10 +69,18 @@
         specialist,
         duration: Number(duration)
       };
-      if (!appointmentConflict(candidate)) slots.push(candidate.time);
-      if (slots.length >= 4) break;
+      slots.push({
+        time: candidate.time,
+        busy: Boolean(appointmentConflict(candidate))
+      });
     }
     return slots;
+  }
+
+  function availableSlots(day, specialist, duration = 60) {
+    return slotStates(day, specialist, duration)
+      .filter((slot) => !slot.busy)
+      .map((slot) => slot.time);
   }
 
   function selectedProcedureDuration() {
@@ -136,12 +145,13 @@
           .join("")
       : `<div class="empty-state">No hay citas registradas para este dia.</div>`;
 
-    const availability = procedureSpecialists
+    const agendaSpecialists = typeof currentBranchSpecialists === "function" ? currentBranchSpecialists() : procedureSpecialists;
+    const availability = agendaSpecialists
       .map((specialist) => {
         const booked = selectedAppointments.filter(
           (appointment) => normalize(appointment.specialist) === normalize(specialist.name) && isOpenAppointment(appointment)
         );
-        const slots = availableSlots(selectedDay, specialist.name, 60);
+        const slots = slotStates(selectedDay, specialist.name, 60);
         return `
           <article class="agenda-availability-card">
             <div>
@@ -154,9 +164,13 @@
                   ? slots
                       .map(
                         (slot) =>
-                          `<button type="button" data-agenda-slot="${escapeHtml(slot)}" data-agenda-specialist="${escapeHtml(
+                          `<button class="${slot.busy ? "is-busy" : "is-free"}" type="button" data-agenda-slot="${escapeHtml(
+                            slot.time
+                          )}" data-agenda-specialist="${escapeHtml(
                             specialist.name
-                          )}">${escapeHtml(slot)}</button>`
+                          )}" ${slot.busy ? 'disabled aria-disabled="true" title="Horario ocupado"' : ""}>${escapeHtml(
+                            slot.time
+                          )}</button>`
                       )
                       .join("")
                   : `<span class="agenda-full">Sin cupos</span>`
@@ -204,7 +218,7 @@
       <section class="agenda-availability">
         <div class="agenda-today-head">
           <strong>Disponibilidad por especialista</strong>
-          <span>20 personas | cupos de 60 mins</span>
+          <span>${escapeHtml(agendaSpecialists.length)} personas | cupos de 60 mins</span>
         </div>
         <div class="agenda-availability-grid">${availability}</div>
       </section>
@@ -213,6 +227,7 @@
 
   window.renderAppointmentAgenda = renderAppointmentAgenda;
 
+  const originalAddAppointment = addAppointment;
   addAppointment = function (data) {
     const duration = Math.max(15, Number(data.duration || appointmentDuration(data)));
     const payload = {
@@ -249,7 +264,8 @@
   viewRenderers.citas = function (search) {
     const selectedClient = prefill.clientId || state.clients[0]?.id || "";
     const selectedProcedure = prefill.procedureId || state.procedures[0]?.id || "";
-    const selectedSpecialist = prefill.specialist || procedureSpecialists[0]?.name || "";
+    const agendaSpecialists = typeof currentBranchSpecialists === "function" ? currentBranchSpecialists() : procedureSpecialists;
+    const selectedSpecialist = prefill.specialist || agendaSpecialists[0]?.name || "";
     const selectedDay = selectedAgendaDate || todayISO();
     const defaultDuration = selectedProcedureDuration();
     const firstAvailableTime = availableSlots(selectedDay, selectedSpecialist, defaultDuration)[0] || "10:00";
@@ -477,14 +493,28 @@
       flex-wrap: wrap;
       justify-content: flex-end;
       gap: 6px;
+      max-height: 142px;
+      overflow: auto;
     }
 
     .agenda-slot-row button {
       min-height: 26px;
+      min-width: 58px;
       padding: 0 8px;
+      opacity: 1;
+    }
+
+    .agenda-slot-row button.is-free {
       color: #315657;
       background: var(--mint-soft);
       border-color: rgba(95, 137, 134, 0.18);
+    }
+
+    .agenda-slot-row button.is-busy {
+      color: #8d1e16;
+      background: #ffe0dc;
+      border-color: rgba(180, 47, 36, 0.34);
+      cursor: not-allowed;
     }
 
     .agenda-full {
