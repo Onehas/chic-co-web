@@ -127,7 +127,7 @@
       ["Tarjeta", safeMoney(invoices.filter((invoice) => invoice.paymentMethod === "Tarjeta").reduce((sum, invoice) => sum + invoiceAmount(invoice), 0))],
       ["Citas hoy", (state.appointments || []).filter((appointment) => appointment.date === todayFileStamp()).length],
       ["Planes activos", (state.plans || []).filter((plan) => plan.status !== "Completado").length],
-      ["Stock bajo", typeof lowStockProducts === "function" ? lowStockProducts().length : 0],
+      ["Stock bajo", typeof lowProducts === "function" ? lowProducts().length : 0],
       ["Clientes", (state.clients || []).length]
     ];
 

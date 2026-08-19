@@ -362,33 +362,50 @@ const elements = {
 
 let pendingStockUseProductId = "";
 
+// Deja cualquier estado -del backend, de localStorage o de un respaldo- en la
+// forma que espera la aplicacion: colecciones completas, las dos sucursales
+// reconstruidas y la sucursal activa volcada al nivel superior de `state`.
+// Sin esto, un estado adoptado del backend puede mostrar los datos de la otra
+// sucursal hasta que el usuario la cambia a mano.
+function normalizeStateSnapshot(snapshot) {
+  const parsed = snapshot && typeof snapshot === "object" && !Array.isArray(snapshot) ? snapshot : {};
+  const merged = { ...clone(defaultState), ...parsed };
+
+  branchDataKeys.forEach((key) => {
+    if (!Array.isArray(merged[key])) merged[key] = [];
+  });
+
+  const fallbackBranches = defaultBranches();
+  const savedBranches = parsed.branches || {};
+  const legacyRohrmoserData = pickBranchData(merged);
+  merged.branches = branchOptions.reduce((branches, branch) => {
+    const fallback = branch.id === "rohrmoser" && !parsed.branches ? legacyRohrmoserData : fallbackBranches[branch.id];
+    branches[branch.id] = normalizeBranchData(savedBranches[branch.id], fallback);
+    return branches;
+  }, {});
+
+  merged.currentBranchId = branchOptions.some((branch) => branch.id === merged.currentBranchId)
+    ? merged.currentBranchId
+    : "rohrmoser";
+  writeBranchData(merged, merged.branches[merged.currentBranchId]);
+
+  merged.users =
+    Array.isArray(merged.users) && merged.users.length
+      ? ensureSystemUsers(merged.users.map(normalizeUser))
+      : ensureSystemUsers(clone(defaultState.users).map(normalizeUser));
+  merged.currentUserId = merged.currentUserId || defaultState.currentUserId;
+  if (!merged.users.some((user) => user.id === merged.currentUserId && user.active)) {
+    merged.currentUserId = merged.users.find((user) => user.active)?.id || defaultState.currentUserId;
+  }
+
+  return merged;
+}
+
 function loadState() {
   try {
     const saved = localStorage.getItem(storageKey);
     if (!saved) return createInitialState();
-    const parsed = JSON.parse(saved);
-    const merged = { ...clone(defaultState), ...parsed };
-    merged.stockMovements = merged.stockMovements || [];
-    merged.invoices = merged.invoices || clone(defaultState.invoices);
-    const fallbackBranches = defaultBranches();
-    const savedBranches = parsed.branches || {};
-    const legacyRohrmoserData = pickBranchData(merged);
-    merged.branches = branchOptions.reduce((branches, branch) => {
-      const fallback = branch.id === "rohrmoser" && !parsed.branches ? legacyRohrmoserData : fallbackBranches[branch.id];
-      branches[branch.id] = normalizeBranchData(savedBranches[branch.id], fallback);
-      return branches;
-    }, {});
-    merged.currentBranchId = branchOptions.some((branch) => branch.id === merged.currentBranchId) ? merged.currentBranchId : "rohrmoser";
-    writeBranchData(merged, merged.branches[merged.currentBranchId]);
-    merged.users =
-      Array.isArray(merged.users) && merged.users.length
-        ? ensureSystemUsers(merged.users.map(normalizeUser))
-        : ensureSystemUsers(clone(defaultState.users).map(normalizeUser));
-    merged.currentUserId = merged.currentUserId || defaultState.currentUserId;
-    if (!merged.users.some((user) => user.id === merged.currentUserId && user.active)) {
-      merged.currentUserId = merged.users.find((user) => user.active)?.id || defaultState.currentUserId;
-    }
-    return merged;
+    return normalizeStateSnapshot(JSON.parse(saved));
   } catch (error) {
     return createInitialState();
   }
@@ -413,14 +430,29 @@ function normalizeUser(user) {
   };
 }
 
+// Garantiza que existan las cinco cuentas autorizadas y que el super usuario
+// siga siendo super y activo. La identidad guardada (correo y nombre) manda
+// sobre la plantilla local: de lo contrario cada guardado borraria el correo
+// que el servidor tiene registrado para esa cuenta.
 function ensureSystemUsers(users) {
-  const normalizedSuperUser = normalizeUser(superUserAccount);
   const usersById = new Map(
     users
       .filter((user) => allowedUserIds.includes(user.id))
       .map((user) => [user.id, normalizeUser(user)])
   );
-  usersById.set(normalizedSuperUser.id, normalizedSuperUser);
+
+  const savedSuperUser = usersById.get(superUserAccount.id);
+  usersById.set(
+    superUserAccount.id,
+    normalizeUser({
+      ...superUserAccount,
+      ...(savedSuperUser || {}),
+      role: "super",
+      active: true,
+      permissions: rolePresets.super.permissions
+    })
+  );
+
   return allowedUserIds.map((userId) => usersById.get(userId) || normalizeUser(defaultState.users.find((user) => user.id === userId))).filter(Boolean);
 }
 
