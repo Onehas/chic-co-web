@@ -205,6 +205,11 @@ const defaultState = {
 };
 
 const moduleConfig = {
+  dashboard: {
+    title: "Dashboard de direccion",
+    description: "Saldos, facturas y ventas en vivo por sucursal, colaborador, servicio y producto.",
+    actions: []
+  },
   clientes: {
     title: "Clientes",
     description: "Registra informacion de contacto, historial, notas y acciones rapidas para planes o citas.",
@@ -736,8 +741,15 @@ function alegraCell(invoice) {
   }`;
 }
 
+function isAdminRole(user = currentUser()) {
+  return Boolean(user?.active && (user.role === "super" || user.role === "admin"));
+}
+
 function canView(moduleName) {
   const user = currentUser();
+  // El dashboard de direccion es solo para administradores; no pasa por la
+  // matriz de permisos por modulo.
+  if (moduleName === "dashboard") return isAdminRole(user);
   return Boolean(user?.active && user.permissions?.[moduleName]?.read);
 }
 
@@ -960,6 +972,11 @@ function renderSummary() {
   elements.moduleMetrics.innerHTML = moduleMetrics(currentModule)
     .map(([value, label]) => `<div class="metric"><strong>${escapeHtml(value)}</strong><span>${escapeHtml(label)}</span></div>`)
     .join("");
+  if (currentModule === "dashboard") {
+    // El dashboard es de solo lectura por naturaleza; no tiene sentido el aviso.
+    elements.moduleActions.innerHTML = "";
+    return;
+  }
   if (!canWrite(currentModule)) {
     elements.moduleActions.innerHTML = `<div class="permission-note">Solo lectura para ${escapeHtml(currentUser()?.name || "este usuario")}</div>`;
     return;
@@ -1137,8 +1154,186 @@ function statusBadge(status) {
   return `<span class="status-badge ${className}">${escapeHtml(status)}</span>`;
 }
 
+/* =====================================================================
+   Dashboard de direccion (solo administradores)
+   ---------------------------------------------------------------------
+   Agrega en vivo las facturas de TODAS las sucursales. La sucursal activa se
+   lee del espejo de nivel superior (lo mas fresco); las demas, de
+   state.branches. Cada re-render refleja el estado ya sincronizado, asi que el
+   tablero se actualiza solo cuando entra una factura nueva.
+   ===================================================================== */
+
+let dashboardPeriod = "mes";
+
+const dashboardPeriods = [
+  { id: "hoy", label: "Hoy" },
+  { id: "mes", label: "Este mes" },
+  { id: "todo", label: "Todo" }
+];
+
+function branchLabel(branchId) {
+  return branchOptions.find((branch) => branch.id === branchId)?.label || branchId;
+}
+
+// Facturas de todas las sucursales, con su sucursal y los nombres resueltos
+// dentro de la coleccion de esa misma sucursal (un cliente de Alajuela no vive
+// en Rohrmoser).
+function allInvoicesAcrossBranches() {
+  const branches = state.branches || {};
+  const rows = [];
+  Object.keys(branches).forEach((branchId) => {
+    const isCurrent = branchId === state.currentBranchId;
+    const data = isCurrent
+      ? { invoices: state.invoices, clients: state.clients, procedures: state.procedures, products: state.products }
+      : branches[branchId] || {};
+    const nameIn = (list, id) => (list || []).find((item) => item.id === id)?.name || "";
+    (data.invoices || []).forEach((invoice) => {
+      rows.push({
+        invoice,
+        branchId,
+        branchName: branchLabel(branchId),
+        clientName: nameIn(data.clients, invoice.clientId) || "Cliente",
+        procedureName: nameIn(data.procedures, invoice.procedureId) || "Sin servicio",
+        productName: nameIn(data.products, invoice.productId),
+        collaborator: (invoice.collaborator || "").trim() || "Sin asignar"
+      });
+    });
+  });
+  return rows;
+}
+
+function invoiceInPeriod(invoice, period) {
+  const date = String(invoice.date || "");
+  if (period === "hoy") return date === todayISO();
+  if (period === "mes") return date.slice(0, 7) === todayISO().slice(0, 7);
+  return true;
+}
+
+// Suma facturado (total con IVA), cobrado (pagos) y saldo pendiente (lo que
+// falta por cobrar) de un grupo de filas.
+function sumInvoiceRows(rows) {
+  return rows.reduce(
+    (acc, row) => {
+      const total = invoiceTotal(row.invoice);
+      const paid = Number(row.invoice.paid || 0);
+      const pending = Math.max(0, total - paid);
+      acc.facturado += total;
+      acc.cobrado += Math.min(paid, total);
+      acc.pendiente += pending;
+      acc.count += 1;
+      if (pending > 0) acc.pendientes += 1;
+      return acc;
+    },
+    { facturado: 0, cobrado: 0, pendiente: 0, count: 0, pendientes: 0 }
+  );
+}
+
+// Agrupa filas por una clave y devuelve los grupos ordenados por facturado.
+function groupInvoiceRows(rows, keyFn) {
+  const groups = new Map();
+  rows.forEach((row) => {
+    const key = keyFn(row) || "—";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  });
+  return [...groups.entries()]
+    .map(([key, groupRows]) => ({ key, ...sumInvoiceRows(groupRows) }))
+    .sort((a, b) => b.facturado - a.facturado);
+}
+
+function dashboardBreakdownTable(title, groups, extraLabel) {
+  if (!groups.length) {
+    return `<section class="dash-panel"><h3>${escapeHtml(title)}</h3><p class="dash-empty">Sin datos en este periodo.</p></section>`;
+  }
+  const rows = groups
+    .map(
+      (group) => `
+        <tr>
+          <td>${escapeHtml(group.key)}</td>
+          <td class="dash-num">${money(group.facturado)}</td>
+          <td class="dash-num">${money(group.cobrado)}</td>
+          <td class="dash-num${group.pendiente > 0 ? " is-pending" : ""}">${money(group.pendiente)}</td>
+          <td class="dash-num dash-muted">${group.count}</td>
+        </tr>`
+    )
+    .join("");
+  return `
+    <section class="dash-panel">
+      <h3>${escapeHtml(title)}</h3>
+      <div class="table-wrap">
+        <table class="dash-table">
+          <thead>
+            <tr>
+              <th>${escapeHtml(extraLabel)}</th>
+              <th class="dash-num">Facturado</th>
+              <th class="dash-num">Cobrado</th>
+              <th class="dash-num">Saldo</th>
+              <th class="dash-num">Facturas</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </section>`;
+}
 
 const viewRenderers = {
+  dashboard() {
+    const period = dashboardPeriod;
+    const all = allInvoicesAcrossBranches().filter((row) => invoiceInPeriod(row.invoice, period));
+    const totals = sumInvoiceRows(all);
+
+    const periodTabs = dashboardPeriods
+      .map(
+        (item) =>
+          `<button type="button" class="dash-tab${item.id === period ? " is-active" : ""}" data-dashboard-period="${item.id}">${escapeHtml(item.label)}</button>`
+      )
+      .join("");
+
+    const kpis = [
+      ["Facturado", money(totals.facturado)],
+      ["Cobrado", money(totals.cobrado)],
+      ["Saldo pendiente", money(totals.pendiente)],
+      ["Facturas", String(totals.count)],
+      ["Por cobrar", String(totals.pendientes)]
+    ]
+      .map(
+        ([label, value]) => `
+          <div class="dash-kpi">
+            <span class="dash-kpi-value">${escapeHtml(value)}</span>
+            <span class="dash-kpi-label">${escapeHtml(label)}</span>
+          </div>`
+      )
+      .join("");
+
+    const byBranch = groupInvoiceRows(all, (row) => row.branchName);
+    const byCollaborator = groupInvoiceRows(all, (row) => row.collaborator);
+    const byService = groupInvoiceRows(all, (row) => row.procedureName);
+    const byProduct = groupInvoiceRows(
+      all.filter((row) => row.productName && Number(row.invoice.productAmount || 0) > 0),
+      (row) => row.productName
+    );
+
+    return `
+      <section class="dash">
+        <div class="dash-head">
+          <div>
+            <h2>Saldos y ventas en vivo</h2>
+            <p>Todas las sucursales juntas. Se actualiza solo cuando entra una factura.</p>
+          </div>
+          <div class="dash-tabs" role="group" aria-label="Periodo">${periodTabs}</div>
+        </div>
+        <div class="dash-kpis">${kpis}</div>
+        <div class="dash-grid">
+          ${dashboardBreakdownTable("Por sucursal", byBranch, "Sucursal")}
+          ${dashboardBreakdownTable("Por colaborador", byCollaborator, "Colaborador")}
+          ${dashboardBreakdownTable("Por servicio", byService, "Servicio")}
+          ${dashboardBreakdownTable("Por producto", byProduct, "Producto")}
+        </div>
+      </section>
+    `;
+  },
+
   clientes(search) {
     const rows = state.clients
       .filter((client) => matchesSearch([client.name, client.phone, client.email, client.notes], search))
@@ -1649,6 +1844,7 @@ const viewRenderers = {
             { value: "Estetica", label: "Estetica - tratamientos" }
           ], defaultArea, "required")}
           ${selectField("Procedimiento", "procedureId", procedureOptions(selectedProcedure), selectedProcedure, "required")}
+          ${selectField("Colaborador", "collaborator", specialistOptions("Andrea Morales"), "Andrea Morales", "required")}
           ${selectField("Producto llevado", "productId", productOptions(selectedProduct), selectedProduct)}
           ${inputField("Cantidad producto", "productQty", "number", "1", "min='0' required")}
           ${inputField("Monto servicio", "serviceAmount", "number", defaultServiceAmount, "min='0' step='100' required")}
@@ -2429,6 +2625,7 @@ function addInvoice(data) {
     date: data.date || todayISO(),
     clientId: data.clientId,
     area: data.area,
+    collaborator: (data.collaborator || "").trim(),
     procedureId: data.procedureId,
     productId: data.productId,
     productQty,
@@ -2616,6 +2813,13 @@ function handleRowActions(event) {
   const toggleUserButton = event.target.closest("[data-toggle-user]");
   const freeStationButton = event.target.closest("[data-free-station]");
   const removeStationButton = event.target.closest("[data-remove-station]");
+  const dashboardPeriodButton = event.target.closest("[data-dashboard-period]");
+
+  if (dashboardPeriodButton) {
+    dashboardPeriod = dashboardPeriodButton.dataset.dashboardPeriod;
+    renderView();
+    return;
+  }
 
   if (switchUserButton) {
     switchUser(switchUserButton.dataset.switchUser);
