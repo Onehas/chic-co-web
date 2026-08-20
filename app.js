@@ -2497,8 +2497,9 @@ function openPhotoViewer(imageId, name) {
   photoViewer.root.classList.add("is-open");
   photoViewer.root.setAttribute("aria-hidden", "false");
   // Sin esto el foco se queda en la miniatura que la foto acaba de tapar, y
-  // el tabulador recorre la pagina de detras.
+  // el tabulador recorre la pagina de detras. Ademas se vuelve inerte el fondo.
   photoViewerReturnFocus = document.activeElement;
+  document.querySelectorAll(".topbar, .app-shell").forEach((region) => (region.inert = true));
   photoViewer.close?.focus();
   loadProductImage(imageId).then((url) => {
     if (url) photoViewer.image.src = url;
@@ -2509,6 +2510,7 @@ function closePhotoViewer() {
   if (!photoViewer.root?.classList.contains("is-open")) return;
   photoViewer.root.classList.remove("is-open");
   photoViewer.root.setAttribute("aria-hidden", "true");
+  document.querySelectorAll(".topbar, .app-shell").forEach((region) => (region.inert = false));
   if (photoViewerReturnFocus instanceof HTMLElement) photoViewerReturnFocus.focus();
   photoViewerReturnFocus = null;
 }

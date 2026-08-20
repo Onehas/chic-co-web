@@ -351,6 +351,14 @@ function isLoginRateLimited(req, email) {
 
 function recordFailedLogin(req, email) {
   const now = Date.now();
+  // Poda oportunista: bajo credential-stuffing con correos/IPs rotatorias el
+  // mapa creceria sin limite en un proceso que vive semanas. Se limpia al
+  // escribir, como el limitador publico.
+  if (loginAttempts.size > 5000) {
+    loginAttempts.forEach((value, mapKey) => {
+      if (now > value.resetAt) loginAttempts.delete(mapKey);
+    });
+  }
   loginAttemptKeys(req, email).forEach((key) => {
     const entry = loginAttempts.get(key);
     if (!entry || now > entry.resetAt) {
