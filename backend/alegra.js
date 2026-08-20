@@ -15,21 +15,84 @@
 // la operacion: la factura ya quedo guardada en el sistema; lo que se registra
 // es que el envio externo fallo, para reintentarlo.
 
-const email = process.env.ALEGRA_EMAIL || "";
-const token = process.env.ALEGRA_TOKEN || "";
-const taxId = process.env.ALEGRA_TAX_ID || "";
-const endpoint = process.env.ALEGRA_ENDPOINT || "https://api.alegra.com/api/v1";
+const defaultEndpoint = "https://api.alegra.com/api/v1";
 const requestTimeoutMs = 15000;
+
+// Configuracion viva. Arranca desde las variables de entorno (compatibilidad)
+// pero se puede sobreescribir en caliente desde la app con `configure()`, para
+// que el negocio conecte Alegra sin tocar el servidor ni redeployar.
+const config = {
+  email: process.env.ALEGRA_EMAIL || "",
+  token: process.env.ALEGRA_TOKEN || "",
+  taxId: process.env.ALEGRA_TAX_ID || "",
+  endpoint: process.env.ALEGRA_ENDPOINT || defaultEndpoint
+};
+
+// Aplica una configuracion guardada. Un campo ausente o vacio no pisa lo que ya
+// habia (asi el token no se borra al guardar solo el correo), salvo que se pase
+// explicitamente la bandera para limpiarlo.
+function configure(next = {}) {
+  if (typeof next.email === "string") config.email = next.email.trim();
+  if (typeof next.token === "string" && next.token) config.token = next.token.trim();
+  if (next.clearToken) config.token = "";
+  if (typeof next.taxId === "string") config.taxId = next.taxId.trim();
+  if (typeof next.endpoint === "string") {
+    config.endpoint = next.endpoint.trim() || defaultEndpoint;
+  }
+  return currentConfig();
+}
+
+// Vista sin secretos para la app: nunca sale el token en claro, solo si existe
+// y una pista de sus ultimos caracteres para reconocerlo.
+function currentConfig() {
+  return {
+    configured: isConfigured(),
+    email: config.email,
+    taxId: config.taxId,
+    endpoint: config.endpoint,
+    hasToken: Boolean(config.token),
+    tokenHint: config.token ? `****${config.token.slice(-4)}` : ""
+  };
+}
 
 const deliveryLog = [];
 const deliveryLogLimit = 50;
 
 function isConfigured() {
-  return Boolean(email && token);
+  return Boolean(config.email && config.token);
 }
 
 function authHeader() {
-  return `Basic ${Buffer.from(`${email}:${token}`).toString("base64")}`;
+  return `Basic ${Buffer.from(`${config.email}:${config.token}`).toString("base64")}`;
+}
+
+// Comprueba las credenciales contra Alegra sin emitir nada: pide los datos de
+// la empresa. 200 = conecta; 401 = credenciales malas; otro = problema de red o
+// del servicio. Asi el usuario sabe si quedo bien conectado antes de facturar.
+async function testConnection() {
+  if (!isConfigured()) return { ok: false, reason: "Falta el correo o el token." };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
+  try {
+    const response = await fetch(`${config.endpoint}/company`, {
+      method: "GET",
+      headers: { Authorization: authHeader(), Accept: "application/json" },
+      signal: controller.signal
+    });
+    if (response.status === 401 || response.status === 403) {
+      return { ok: false, status: response.status, reason: "Credenciales rechazadas por Alegra." };
+    }
+    if (!response.ok) {
+      return { ok: false, status: response.status, reason: `Alegra respondio HTTP ${response.status}.` };
+    }
+    const payload = await response.json().catch(() => ({}));
+    return { ok: true, status: response.status, name: String(payload?.name || "") };
+  } catch (error) {
+    const reason = error.name === "AbortError" ? "Tiempo de espera agotado." : error.message;
+    return { ok: false, reason };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function recordDelivery(entry) {
@@ -97,7 +160,7 @@ function buildItem(name, price, quantity, ivaRate) {
   };
   // El id de impuesto es especifico de cada cuenta de Alegra; si no se
   // configura, se envia el porcentaje para que quede documentado el IVA.
-  if (taxId) item.tax = [{ id: taxId }];
+  if (config.taxId) item.tax = [{ id: config.taxId }];
   else if (Number(ivaRate) > 0) item.tax = [{ percentage: Number(ivaRate) }];
   return item;
 }
@@ -113,7 +176,7 @@ async function sendInvoice(invoice, context = {}) {
   const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
 
   try {
-    const response = await fetch(`${endpoint}/invoices`, {
+    const response = await fetch(`${config.endpoint}/invoices`, {
       method: "POST",
       headers: {
         Authorization: authHeader(),
@@ -151,6 +214,9 @@ async function sendInvoice(invoice, context = {}) {
 
 module.exports = {
   isConfigured,
+  configure,
+  currentConfig,
+  testConnection,
   mapPaymentMethod,
   mapInvoiceToAlegra,
   buildItem,

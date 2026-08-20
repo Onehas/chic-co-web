@@ -10,6 +10,7 @@ const publicBooking = require("./public-booking");
 const mailer = require("./mailer");
 const dailyReport = require("./daily-report");
 const alegra = require("./alegra");
+const alegraConfigStore = require("./alegra-config-store");
 const collectionStore = require("./collection-store");
 
 const rootDir = path.resolve(__dirname, "..");
@@ -1752,6 +1753,47 @@ async function handleInvoiceToAlegra(req, res, session, invoiceId) {
   else sendError(req, res, 502, record.reason);
 }
 
+// Configuracion de Alegra desde la app. Solo un administrador la ve o cambia.
+// El token nunca sale en claro: la vista publica solo dice si existe y una
+// pista. Al guardar se persiste fuera del estado y se reconfigura el adaptador
+// en caliente, sin redeployar.
+async function handleAlegraConfig(req, res, session) {
+  const state = await ensureState();
+  const user = sessionUserFromState(state, session);
+  if (!isFullAccessUser(user)) {
+    sendError(req, res, 403, "Solo un administrador puede ver o cambiar la conexion con Alegra.");
+    return;
+  }
+
+  if (req.method === "GET") {
+    sendJson(req, res, 200, { ok: true, config: alegra.currentConfig() });
+    return;
+  }
+
+  const payload = await readJsonBody(req);
+  const stored = await alegraConfigStore.save({
+    email: payload.email,
+    token: payload.token,
+    taxId: payload.taxId,
+    endpoint: payload.endpoint,
+    clearToken: Boolean(payload.clearToken)
+  });
+  alegra.configure({ ...stored, clearToken: Boolean(payload.clearToken) });
+  sendJson(req, res, 200, { ok: true, config: alegra.currentConfig() });
+}
+
+// Prueba la conexion con las credenciales vigentes sin emitir ninguna factura.
+async function handleAlegraTest(req, res, session) {
+  const state = await ensureState();
+  const user = sessionUserFromState(state, session);
+  if (!isFullAccessUser(user)) {
+    sendError(req, res, 403, "Solo un administrador puede probar la conexion con Alegra.");
+    return;
+  }
+  const result = await alegra.testConnection();
+  sendJson(req, res, result.ok ? 200 : 400, { ok: result.ok, result });
+}
+
 async function handleApi(req, res, url) {
   const pathname = url.pathname;
   if (!isAllowedOrigin(req)) {
@@ -1842,6 +1884,16 @@ async function handleApi(req, res, url) {
         correo: { configured: mailer.isConfigured() }
       }
     });
+    return;
+  }
+
+  if (pathname === "/api/alegra/config" && (req.method === "GET" || req.method === "PUT")) {
+    await handleAlegraConfig(req, res, session);
+    return;
+  }
+
+  if (pathname === "/api/alegra/test" && req.method === "POST") {
+    await handleAlegraTest(req, res, session);
     return;
   }
 
@@ -2135,8 +2187,21 @@ if (require.main === module) {
   });
 }
 
+// La configuracion de Alegra guardada en la app manda sobre las variables de
+// entorno: se carga al arrancar para que el envio use las credenciales que el
+// negocio conecto desde la interfaz.
+async function loadStoredAlegraConfig() {
+  try {
+    const stored = await alegraConfigStore.load();
+    if (stored) alegra.configure(stored);
+  } catch (error) {
+    console.error("No se pudo cargar la configuracion de Alegra:", error.message);
+  }
+}
+
 // El temporizador se enciende una sola vez, cuando el servidor empieza a oir.
 server.on("listening", () => {
+  loadStoredAlegraConfig();
   // El estado para el reporte y el respaldo se entrega hidratado, para que la
   // instantanea incluya las colecciones que viven en tablas de overlay.
   dailyReport.startScheduler(async () => hydrateForClient(await ensureState()), branchLabels);
