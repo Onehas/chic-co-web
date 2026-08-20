@@ -4,19 +4,25 @@
 // la abre gente desde el telefono con datos moviles: cada kilobyte que no se
 // descarga es medio segundo que no espera.
 //
-// La validacion que hay aqui es comodidad, no seguridad. El servidor revalida
-// absolutamente todo -correo, telefono, horario libre, ventana de reserva-
-// porque cualquiera puede llamar al endpoint sin pasar por este formulario.
+// La validacion de aqui es comodidad, no seguridad. El servidor revalida TODO
+// -correo, telefono, horario libre, ventana de reserva- porque cualquiera puede
+// llamar al endpoint sin pasar por este formulario.
 
 (() => {
   "use strict";
 
-  const elements = {
+  const el = {
     form: document.getElementById("bookingForm"),
-    branch: document.getElementById("branchSelect"),
-    procedure: document.getElementById("procedureSelect"),
-    serviceDetail: document.getElementById("serviceDetail"),
-    date: document.getElementById("dateInput"),
+    branchStep: document.querySelector('[data-step="branch"]'),
+    branchGroup: document.getElementById("branchGroup"),
+    serviceGroup: document.getElementById("serviceGroup"),
+    servicePicked: document.getElementById("servicePicked"),
+    datePicked: document.getElementById("datePicked"),
+    timePicked: document.getElementById("timePicked"),
+    dayStrip: document.getElementById("dayStrip"),
+    moreDates: document.getElementById("moreDates"),
+    dateInput: document.getElementById("dateInput"),
+    nativeDate: document.querySelector(".native-date"),
     dayHint: document.getElementById("dayHint"),
     slots: document.getElementById("slots"),
     slotsEmpty: document.getElementById("slotsEmpty"),
@@ -27,109 +33,48 @@
     website: document.getElementById("websiteInput"),
     summary: document.getElementById("summary"),
     error: document.getElementById("formError"),
+    actionbar: document.getElementById("actionbar"),
     submit: document.getElementById("submitButton"),
     submitLabel: document.getElementById("submitLabel"),
     done: document.getElementById("done"),
     doneDetail: document.getElementById("doneDetail"),
     again: document.getElementById("againButton"),
-    steps: document.querySelectorAll(".step")
+    steps: document.querySelectorAll(".card[data-step]")
   };
 
   let config = null;
-  let selectedTime = "";
+  const sel = { branchId: "", procedureId: "", date: "", time: "" };
   let sending = false;
-  // Cada peticion de disponibilidad lleva numero. Si alguien cambia de fecha
-  // mientras la anterior sigue en vuelo, la respuesta vieja llega despues y
-  // pintaria los horarios del dia equivocado.
+  // Cada peticion de disponibilidad lleva numero: si cambian de dia mientras la
+  // anterior sigue en vuelo, la respuesta vieja no debe pintar el dia equivocado.
   let availabilityToken = 0;
 
-  const monthNames = [
+  const monthShort = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "set", "oct", "nov", "dic"];
+  const monthLong = [
     "enero", "febrero", "marzo", "abril", "mayo", "junio",
     "julio", "agosto", "setiembre", "octubre", "noviembre", "diciembre"
   ];
-  const weekdayNames = ["domingo", "lunes", "martes", "miercoles", "jueves", "viernes", "sabado"];
+  const weekShort = ["dom", "lun", "mar", "mie", "jue", "vie", "sab"];
+  const weekLong = ["domingo", "lunes", "martes", "miercoles", "jueves", "viernes", "sabado"];
 
-  function longDate(dateISO) {
-    const date = new Date(`${dateISO}T00:00:00`);
-    if (Number.isNaN(date.getTime())) return dateISO;
-    return `${weekdayNames[date.getDay()]} ${date.getDate()} de ${monthNames[date.getMonth()]}`;
+  function longDate(iso) {
+    const d = new Date(`${iso}T00:00:00`);
+    if (Number.isNaN(d.getTime())) return iso;
+    return `${weekLong[d.getDay()]} ${d.getDate()} de ${monthLong[d.getMonth()]}`;
   }
 
   function money(value) {
-    return `CRC ${Number(value || 0).toLocaleString("es-CR")}`;
+    return `₡${Number(value || 0).toLocaleString("es-CR")}`;
   }
 
-  function addDays(dateISO, amount) {
-    const date = new Date(`${dateISO}T00:00:00`);
-    date.setDate(date.getDate() + amount);
-    return date.toISOString().slice(0, 10);
+  function todayISO() {
+    return new Date().toISOString().slice(0, 10);
   }
 
-  async function api(path, options) {
-    const response = await fetch(path, {
-      headers: { "Content-Type": "application/json" },
-      ...options
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw Object.assign(new Error(payload.message || "No se pudo completar la accion."), {
-        status: response.status
-      });
-    }
-    return payload;
-  }
-
-  function currentBranch() {
-    return config?.branches.find((branch) => branch.id === elements.branch.value) || null;
-  }
-
-  function currentProcedure() {
-    return currentBranch()?.procedures.find((procedure) => procedure.id === elements.procedure.value) || null;
-  }
-
-  /* --- Pasos ----------------------------------------------------------- */
-
-  function refreshSteps() {
-    const done = [
-      Boolean(elements.procedure.value),
-      Boolean(elements.date.value),
-      Boolean(selectedTime),
-      Boolean(elements.name.value.trim() && elements.phone.value.trim() && elements.email.value.trim())
-    ];
-
-    elements.steps.forEach((step, index) => {
-      step.classList.toggle("is-done", done[index]);
-      // Se activa el paso si ya se completo o si es el siguiente por hacer:
-      // el resto queda atenuado, visible pero claramente aun no.
-      const reachable = index === 0 || done.slice(0, index).every(Boolean);
-      step.classList.toggle("is-active", reachable);
-    });
-
-    refreshSummary(done);
-  }
-
-  function refreshSummary(done) {
-    const ready = done.every(Boolean);
-    const procedure = currentProcedure();
-
-    if (done[0] && done[1] && done[2] && procedure) {
-      elements.summary.hidden = false;
-      elements.summary.innerHTML = `
-        <strong>${escapeHtml(procedure.name)}</strong>
-        <span>${escapeHtml(longDate(elements.date.value))} a las ${escapeHtml(selectedTime)}</span>
-        <span>${escapeHtml(currentBranch()?.label || "")}</span>
-      `;
-    } else {
-      elements.summary.hidden = true;
-    }
-
-    elements.submit.disabled = !ready || sending;
-    if (sending) elements.submitLabel.textContent = "Enviando...";
-    else if (ready) elements.submitLabel.textContent = "Solicitar esta cita";
-    else if (!done[0]) elements.submitLabel.textContent = "Elige un servicio";
-    else if (!done[1]) elements.submitLabel.textContent = "Elige una fecha";
-    else if (!done[2]) elements.submitLabel.textContent = "Elige una hora";
-    else elements.submitLabel.textContent = "Completa tus datos";
+  function addDays(iso, n) {
+    const d = new Date(`${iso}T00:00:00`);
+    d.setDate(d.getDate() + n);
+    return d.toISOString().slice(0, 10);
   }
 
   function escapeHtml(value) {
@@ -140,131 +85,255 @@
       .replaceAll('"', "&quot;");
   }
 
-  /* --- Carga inicial --------------------------------------------------- */
+  async function api(path, options) {
+    const response = await fetch(path, { headers: { "Content-Type": "application/json" }, ...options });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw Object.assign(new Error(payload.message || "No se pudo completar la accion."), {
+        status: response.status
+      });
+    }
+    return payload;
+  }
+
+  function branch() {
+    return config?.branches.find((b) => b.id === sel.branchId) || null;
+  }
+  function procedure() {
+    return branch()?.procedures.find((p) => p.id === sel.procedureId) || null;
+  }
+
+  /* --- Estado de los pasos --------------------------------------------- */
+
+  // Un paso queda "listo" cuando su dato esta elegido, "activo" cuando es el
+  // siguiente por hacer, y "bloqueado" mientras falte algo antes. Asi la
+  // persona ve de un vistazo donde va y cuanto queda.
+  function refresh() {
+    const done = {
+      service: Boolean(sel.procedureId),
+      date: Boolean(sel.date),
+      time: Boolean(sel.time),
+      details: Boolean(el.name.value.trim() && el.phone.value.trim() && el.email.value.trim())
+    };
+    const order = ["service", "date", "time", "details"];
+
+    el.steps.forEach((step) => {
+      const key = step.dataset.step;
+      if (key === "branch") return; // la sucursal se maneja aparte
+      const idx = order.indexOf(key);
+      const reachable = order.slice(0, idx).every((k) => done[k]);
+      step.classList.toggle("is-done", done[key]);
+      step.classList.toggle("is-locked", !reachable);
+      step.classList.toggle("is-active", reachable && !done[key]);
+    });
+
+    el.servicePicked.textContent = done.service ? procedure()?.name || "" : "";
+    el.datePicked.textContent = done.date ? shortDateLabel(sel.date) : "";
+    el.timePicked.textContent = done.time ? sel.time : "";
+
+    updateActionbar(done);
+  }
+
+  function shortDateLabel(iso) {
+    const d = new Date(`${iso}T00:00:00`);
+    return `${weekShort[d.getDay()]} ${d.getDate()} ${monthShort[d.getMonth()]}`;
+  }
+
+  function updateActionbar(done) {
+    const ready = done.service && done.date && done.time && done.details;
+
+    if (done.service && done.date && done.time) {
+      el.summary.innerHTML = `<strong>${escapeHtml(procedure()?.name || "")}</strong>${escapeHtml(
+        `${shortDateLabel(sel.date)} · ${sel.time}`
+      )}`;
+    } else {
+      el.summary.textContent = "";
+    }
+
+    el.submit.disabled = !ready || sending;
+    if (sending) el.submitLabel.textContent = "Enviando...";
+    else if (ready) el.submitLabel.textContent = "Solicitar cita";
+    else if (!done.service) el.submitLabel.textContent = "Elige un servicio";
+    else if (!done.date) el.submitLabel.textContent = "Elige un dia";
+    else if (!done.time) el.submitLabel.textContent = "Elige una hora";
+    else el.submitLabel.textContent = "Completa tus datos";
+  }
+
+  /* --- Sucursal -------------------------------------------------------- */
 
   function fillBranches() {
-    elements.branch.innerHTML = config.branches
-      .map((branch) => `<option value="${escapeHtml(branch.id)}">${escapeHtml(branch.label)}</option>`)
-      .join("");
-    fillProcedures();
+    const branches = config.branches;
+    if (branches.length <= 1) {
+      sel.branchId = branches[0]?.id || "";
+      el.branchStep.hidden = true;
+    } else {
+      el.branchStep.hidden = false;
+      sel.branchId = branches[0].id;
+      el.branchGroup.innerHTML = branches
+        .map(
+          (b, i) =>
+            `<button type="button" role="radio" aria-checked="${i === 0}" class="${
+              i === 0 ? "is-selected" : ""
+            }" data-branch="${escapeHtml(b.id)}">${escapeHtml(b.label)}</button>`
+        )
+        .join("");
+    }
+    fillServices();
   }
 
-  function fillProcedures() {
-    const branch = currentBranch();
-    const procedures = branch?.procedures || [];
+  /* --- Servicios como tarjetas ----------------------------------------- */
+
+  function fillServices() {
+    const procedures = branch()?.procedures || [];
+    // Cambiar de sucursal invalida el servicio elegido si ya no existe alli.
+    if (sel.procedureId && !procedures.some((p) => p.id === sel.procedureId)) {
+      sel.procedureId = "";
+      sel.time = "";
+    }
 
     if (!procedures.length) {
-      elements.procedure.innerHTML = `<option value="">Sin servicios disponibles</option>`;
-      elements.serviceDetail.textContent = "Esta sucursal aun no tiene servicios habilitados en linea.";
+      el.serviceGroup.innerHTML = `<p class="slots-empty">Esta sucursal aun no tiene servicios en linea.</p>`;
+      refresh();
       return;
     }
 
-    elements.procedure.innerHTML = [
-      `<option value="">Elige un servicio</option>`,
-      ...procedures.map(
-        (procedure) => `<option value="${escapeHtml(procedure.id)}">${escapeHtml(procedure.name)}</option>`
+    el.serviceGroup.innerHTML = procedures
+      .map((p) => {
+        const selected = p.id === sel.procedureId;
+        const meta = `${p.duration} min`;
+        return `
+          <button type="button" role="radio" aria-checked="${selected}" class="service${
+          selected ? " is-selected" : ""
+        }" data-service="${escapeHtml(p.id)}">
+            <span class="service-radio" aria-hidden="true"></span>
+            <span class="service-body">
+              <span class="service-name">${escapeHtml(p.name)}</span>
+              <span class="service-meta">${escapeHtml(meta)}</span>
+            </span>
+            ${p.price > 0 ? `<span class="service-price">${escapeHtml(money(p.price))}</span>` : ""}
+          </button>`;
+      })
+      .join("");
+    refresh();
+  }
+
+  /* --- Tira de dias ---------------------------------------------------- */
+
+  function buildDayStrip() {
+    const closed = new Set(config.closedWeekdays || []);
+    const horizon = config.maxHorizonDays || 60;
+    const chips = [];
+    let iso = todayISO();
+    let scanned = 0;
+    // Los primeros dias abiertos, hasta 14 o el horizonte.
+    while (chips.length < 14 && scanned <= horizon) {
+      const d = new Date(`${iso}T00:00:00`);
+      if (!closed.has(d.getDay())) {
+        chips.push({ iso, d, today: iso === todayISO() });
+      }
+      iso = addDays(iso, 1);
+      scanned += 1;
+    }
+
+    el.dayStrip.innerHTML = chips
+      .map(
+        (c) => `
+        <button type="button" role="radio" aria-checked="false" class="day${c.today ? " is-today" : ""}"
+          data-day="${escapeHtml(c.iso)}" aria-label="${escapeHtml(longDate(c.iso))}">
+          <span class="day-name">${escapeHtml(weekShort[c.d.getDay()])}</span>
+          <span class="day-num">${escapeHtml(c.d.getDate())}</span>
+          <span class="day-month">${escapeHtml(monthShort[c.d.getMonth()])}</span>
+        </button>`
       )
-    ].join("");
-    elements.serviceDetail.textContent = "";
+      .join("");
+
+    el.dateInput.min = todayISO();
+    el.dateInput.max = addDays(todayISO(), horizon);
   }
 
-  function showServiceDetail() {
-    const procedure = currentProcedure();
-    if (!procedure) {
-      elements.serviceDetail.textContent = "";
-      return;
+  function selectDay(iso, { fromNative = false } = {}) {
+    sel.date = iso;
+    sel.time = "";
+    el.dayStrip.querySelectorAll(".day").forEach((chip) => {
+      const active = chip.dataset.day === iso;
+      chip.classList.toggle("is-selected", active);
+      chip.setAttribute("aria-checked", String(active));
+    });
+    // Si eligieron una fecha lejana por el selector nativo, no hay chip: se
+    // deja el hint con la fecha para que quede claro cual es.
+    if (fromNative) {
+      el.dayHint.classList.remove("is-blocked");
+      el.dayHint.textContent = longDate(iso);
+    } else {
+      el.dayHint.textContent = "";
     }
-    const parts = [`Dura ${procedure.duration} minutos`];
-    if (procedure.price > 0) parts.push(money(procedure.price));
-    elements.serviceDetail.textContent = parts.join(" · ");
-  }
-
-  function configureDateInput() {
-    const today = new Date();
-    const todayISO = today.toISOString().slice(0, 10);
-    elements.date.min = todayISO;
-    elements.date.max = addDays(todayISO, config.maxHorizonDays || 60);
+    loadSlots();
   }
 
   /* --- Disponibilidad -------------------------------------------------- */
 
   async function loadSlots() {
-    selectedTime = "";
-    elements.slots.innerHTML = "";
+    sel.time = "";
+    el.slots.innerHTML = "";
 
-    const procedure = currentProcedure();
-    if (!procedure || !elements.date.value) {
-      elements.slotsEmpty.textContent = "Elige primero un servicio y una fecha.";
-      refreshSteps();
+    const p = procedure();
+    if (!p || !sel.date) {
+      el.slotsEmpty.textContent = "Elige primero un servicio y un dia.";
+      refresh();
       return;
     }
-
-    const weekday = new Date(`${elements.date.value}T00:00:00`).getDay();
-    if ((config.closedWeekdays || []).includes(weekday)) {
-      elements.dayHint.textContent = "Ese dia el salon no abre. Elige otro.";
-      elements.dayHint.classList.add("is-blocked");
-      elements.slotsEmpty.textContent = "";
-      refreshSteps();
-      return;
-    }
-    elements.dayHint.textContent = "";
-    elements.dayHint.classList.remove("is-blocked");
 
     const token = ++availabilityToken;
-    elements.slotsEmpty.textContent = "Buscando horarios...";
+    el.slotsEmpty.textContent = "Buscando horarios...";
 
     try {
-      const query = new URLSearchParams({
-        branchId: elements.branch.value,
-        date: elements.date.value,
-        duration: String(procedure.duration)
-      });
+      const query = new URLSearchParams({ branchId: sel.branchId, date: sel.date, duration: String(p.duration) });
       const result = await api(`/api/public/availability?${query}`);
       if (token !== availabilityToken) return;
 
       if (!result.slots.length) {
-        elements.slotsEmpty.textContent = result.reason || "No quedan espacios ese dia.";
-        refreshSteps();
+        el.slotsEmpty.textContent = result.reason || "No quedan espacios ese dia.";
+        refresh();
         return;
       }
 
-      elements.slotsEmpty.textContent = "";
-      elements.slots.innerHTML = result.slots
+      el.slotsEmpty.textContent = "";
+      el.slots.innerHTML = result.slots
         .map(
           (time) =>
-            `<button class="slot" type="button" data-slot="${escapeHtml(time)}" aria-pressed="false">${escapeHtml(time)}</button>`
+            `<button class="slot" type="button" role="radio" aria-checked="false" data-slot="${escapeHtml(
+              time
+            )}">${escapeHtml(time)}</button>`
         )
         .join("");
     } catch (error) {
       if (token !== availabilityToken) return;
-      elements.slotsEmpty.textContent = "No pudimos cargar los horarios. Intenta de nuevo.";
+      el.slotsEmpty.textContent = "No pudimos cargar los horarios. Intenta de nuevo.";
     }
-
-    refreshSteps();
+    refresh();
   }
 
   /* --- Envio ----------------------------------------------------------- */
 
   function localValidation() {
-    const phoneDigits = elements.phone.value.replace(/\D+/g, "").replace(/^506/, "");
+    const phoneDigits = el.phone.value.replace(/\D+/g, "").replace(/^506/, "");
     if (phoneDigits.length !== 8 || !/^[678]/.test(phoneDigits)) {
-      elements.phone.setAttribute("aria-invalid", "true");
+      el.phone.setAttribute("aria-invalid", "true");
       return "Escribe un celular de 8 digitos que tenga WhatsApp.";
     }
-    elements.phone.removeAttribute("aria-invalid");
+    el.phone.removeAttribute("aria-invalid");
 
-    if (!/^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/.test(elements.email.value.trim())) {
-      elements.email.setAttribute("aria-invalid", "true");
+    if (!/^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/.test(el.email.value.trim())) {
+      el.email.setAttribute("aria-invalid", "true");
       return "Revisa el correo, parece incompleto.";
     }
-    elements.email.removeAttribute("aria-invalid");
+    el.email.removeAttribute("aria-invalid");
 
-    if (elements.name.value.trim().length < 3) {
-      elements.name.setAttribute("aria-invalid", "true");
+    if (el.name.value.trim().length < 3) {
+      el.name.setAttribute("aria-invalid", "true");
       return "Escribe tu nombre completo.";
     }
-    elements.name.removeAttribute("aria-invalid");
-
+    el.name.removeAttribute("aria-invalid");
     return "";
   }
 
@@ -274,100 +343,152 @@
 
     const problem = localValidation();
     if (problem) {
-      elements.error.textContent = problem;
+      el.error.textContent = problem;
       return;
     }
 
     sending = true;
-    elements.error.textContent = "";
-    refreshSteps();
+    el.error.textContent = "";
+    refresh();
 
     try {
       await api("/api/public/booking", {
         method: "POST",
         body: JSON.stringify({
-          branchId: elements.branch.value,
-          procedureId: elements.procedure.value,
-          date: elements.date.value,
-          time: selectedTime,
-          clientName: elements.name.value,
-          clientPhone: elements.phone.value,
-          clientEmail: elements.email.value,
-          notes: elements.notes.value,
-          website: elements.website.value
+          branchId: sel.branchId,
+          procedureId: sel.procedureId,
+          date: sel.date,
+          time: sel.time,
+          clientName: el.name.value,
+          clientPhone: el.phone.value,
+          clientEmail: el.email.value,
+          notes: el.notes.value,
+          website: el.website.value
         })
       });
 
-      elements.doneDetail.textContent = `${currentProcedure()?.name || "Tu cita"} · ${longDate(
-        elements.date.value
-      )} a las ${selectedTime}`;
-      elements.form.hidden = true;
-      elements.done.hidden = false;
-      elements.done.scrollIntoView({ behavior: "smooth", block: "center" });
+      el.doneDetail.textContent = `${procedure()?.name || "Tu cita"} · ${longDate(sel.date)} a las ${sel.time}`;
+      el.form.hidden = true;
+      el.actionbar.hidden = true;
+      el.done.hidden = false;
+      window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (error) {
-      // 409 significa que el hueco se ocupo entre que lo eligio y lo envio:
-      // hay que recargar los horarios o volveria a elegir el mismo.
-      elements.error.textContent = error.message;
+      // 409 = el hueco se ocupo entre elegir y enviar: recargar horarios.
+      el.error.textContent = error.message;
       if (error.status === 409) loadSlots();
     } finally {
       sending = false;
-      refreshSteps();
+      refresh();
     }
   }
 
   function restart() {
-    elements.form.reset();
-    selectedTime = "";
-    elements.slots.innerHTML = "";
-    elements.slotsEmpty.textContent = "Elige primero una fecha.";
-    elements.summary.hidden = true;
-    elements.error.textContent = "";
-    elements.done.hidden = true;
-    elements.form.hidden = false;
-    fillProcedures();
-    showServiceDetail();
-    refreshSteps();
+    el.form.reset();
+    sel.procedureId = "";
+    sel.date = "";
+    sel.time = "";
+    el.slots.innerHTML = "";
+    el.slotsEmpty.textContent = "Elige primero un dia.";
+    el.dayHint.textContent = "";
+    el.error.textContent = "";
+    el.done.hidden = true;
+    el.form.hidden = false;
+    el.actionbar.hidden = false;
+    el.nativeDate.hidden = true;
+    el.dayStrip.querySelectorAll(".day").forEach((c) => {
+      c.classList.remove("is-selected");
+      c.setAttribute("aria-checked", "false");
+    });
+    fillServices();
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  /* --- Enlaces --------------------------------------------------------- */
+  /* --- Interaccion ----------------------------------------------------- */
 
-  elements.branch.addEventListener("change", () => {
-    fillProcedures();
-    showServiceDetail();
-    loadSlots();
+  el.branchGroup.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-branch]");
+    if (!button) return;
+    sel.branchId = button.dataset.branch;
+    el.branchGroup.querySelectorAll("button").forEach((b) => {
+      const active = b === button;
+      b.classList.toggle("is-selected", active);
+      b.setAttribute("aria-checked", String(active));
+    });
+    sel.date = "";
+    sel.time = "";
+    el.dayStrip.querySelectorAll(".day").forEach((c) => {
+      c.classList.remove("is-selected");
+      c.setAttribute("aria-checked", "false");
+    });
+    el.slots.innerHTML = "";
+    el.slotsEmpty.textContent = "Elige primero un dia.";
+    fillServices();
   });
 
-  elements.procedure.addEventListener("change", () => {
-    showServiceDetail();
-    loadSlots();
+  el.serviceGroup.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-service]");
+    if (!button) return;
+    sel.procedureId = button.dataset.service;
+    el.serviceGroup.querySelectorAll(".service").forEach((s) => {
+      const active = s === button;
+      s.classList.toggle("is-selected", active);
+      s.setAttribute("aria-checked", String(active));
+    });
+    // Cambiar de servicio cambia la duracion: los horarios se recalculan.
+    if (sel.date) loadSlots();
+    else refresh();
   });
 
-  elements.date.addEventListener("change", loadSlots);
+  el.dayStrip.addEventListener("click", (event) => {
+    const chip = event.target.closest("[data-day]");
+    if (chip) selectDay(chip.dataset.day);
+  });
 
-  elements.slots.addEventListener("click", (event) => {
+  el.moreDates.addEventListener("click", () => {
+    el.nativeDate.hidden = !el.nativeDate.hidden;
+    if (!el.nativeDate.hidden) el.dateInput.showPicker?.();
+  });
+
+  el.dateInput.addEventListener("change", () => {
+    if (!el.dateInput.value) return;
+    const closed = new Set(config.closedWeekdays || []);
+    const weekday = new Date(`${el.dateInput.value}T00:00:00`).getDay();
+    el.dayStrip.querySelectorAll(".day").forEach((c) => {
+      c.classList.remove("is-selected");
+      c.setAttribute("aria-checked", "false");
+    });
+    if (closed.has(weekday)) {
+      el.dayHint.classList.add("is-blocked");
+      el.dayHint.textContent = "Ese dia el salon no abre. Elige otro.";
+      sel.date = "";
+      sel.time = "";
+      el.slots.innerHTML = "";
+      el.slotsEmpty.textContent = "";
+      refresh();
+      return;
+    }
+    selectDay(el.dateInput.value, { fromNative: true });
+  });
+
+  el.slots.addEventListener("click", (event) => {
     const button = event.target.closest("[data-slot]");
     if (!button) return;
-    selectedTime = button.dataset.slot;
-    elements.slots.querySelectorAll(".slot").forEach((slot) => {
-      const active = slot === button;
-      slot.classList.toggle("is-selected", active);
-      slot.setAttribute("aria-pressed", String(active));
+    sel.time = button.dataset.slot;
+    el.slots.querySelectorAll(".slot").forEach((s) => {
+      const active = s === button;
+      s.classList.toggle("is-selected", active);
+      s.setAttribute("aria-checked", String(active));
     });
-    elements.error.textContent = "";
-    refreshSteps();
+    el.error.textContent = "";
+    refresh();
   });
 
-  [elements.name, elements.phone, elements.email].forEach((input) => {
-    input.addEventListener("input", refreshSteps);
-  });
-
-  elements.form.addEventListener("submit", submit);
-  elements.again.addEventListener("click", restart);
+  [el.name, el.phone, el.email].forEach((input) => input.addEventListener("input", refresh));
+  el.form.addEventListener("submit", submit);
+  el.again.addEventListener("click", restart);
 
   /* --- Arranque -------------------------------------------------------- */
 
-  // Identidad del negocio: logo y nombre configurados desde el sistema.
   async function loadBranding() {
     try {
       const response = await fetch("/api/public/branding", { cache: "no-store" });
@@ -393,12 +514,14 @@
       const result = await api("/api/public/config");
       config = result.config;
       fillBranches();
-      configureDateInput();
-      refreshSteps();
+      buildDayStrip();
+      el.actionbar.hidden = false;
+      refresh();
     } catch (error) {
-      elements.error.textContent =
-        "No pudimos cargar la agenda en este momento. Escribenos por WhatsApp y te ayudamos.";
-      elements.submit.disabled = true;
+      el.serviceGroup.innerHTML =
+        '<p class="slots-empty">No pudimos cargar la agenda ahora. Escribenos por WhatsApp y te ayudamos.</p>';
+      el.actionbar.hidden = false;
+      el.submit.disabled = true;
     }
   })();
 })();

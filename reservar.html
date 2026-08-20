@@ -2,137 +2,143 @@
 <html lang="es">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Reservar cita · Chic &amp; Co</title>
-    <meta name="description" content="Solicita tu cita en Chic & Co. Elige el servicio, el dia y la hora." />
+    <meta name="description" content="Reserva tu cita en Chic & Co. Elige el servicio, el dia y la hora en un minuto." />
+    <meta name="theme-color" content="#f2f2f4" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
     <link rel="icon" href="assets/chic-co-logo-black.png" />
     <link rel="stylesheet" href="reservar.css" />
   </head>
   <body>
-    <main class="booking" id="booking">
-      <header class="booking-head">
-        <div class="booking-logo">
+    <div class="aurora" aria-hidden="true"></div>
+
+    <main class="page" id="page">
+      <header class="hero">
+        <div class="hero-logo">
           <img src="assets/chic-co-logo-black.png" alt="Chic &amp; Co" id="brandLogo" />
         </div>
-        <p class="eyebrow" id="brandName">Chic &amp; Co</p>
-        <h1>Reservar una cita</h1>
-        <p class="lead">
-          Elige el servicio, el dia y la hora. Te confirmamos por WhatsApp o correo antes de apartarte el espacio.
-        </p>
+        <p class="hero-eyebrow" id="brandName">Chic &amp; Co</p>
+        <h1 class="hero-title">Reserva tu cita</h1>
+        <p class="hero-sub">Servicio, dia y hora en un minuto. Te confirmamos por WhatsApp.</p>
       </header>
 
-      <!-- Los cuatro pasos existen desde el principio en el marcado; el guion
-           solo revela el siguiente. Asi el formulario funciona aunque falle
-           una peticion a mitad de camino. -->
-      <form class="booking-form" id="bookingForm" autocomplete="on" novalidate>
-        <ol class="steps" id="steps">
-          <li class="step is-active" data-step="1">
-            <h2><span class="step-number">1</span> Sucursal y servicio</h2>
+      <form class="flow" id="bookingForm" autocomplete="on" novalidate>
+        <section class="card" data-step="branch" hidden>
+          <div class="card-head">
+            <span class="card-index">1</span>
+            <h2>Sucursal</h2>
+            <svg class="card-check" viewBox="0 0 20 20" aria-hidden="true"><path d="M5 10.5l3.2 3.2L15 7" /></svg>
+          </div>
+          <div class="segmented" id="branchGroup" role="radiogroup" aria-label="Elige la sucursal"></div>
+        </section>
 
-            <label class="field">
-              <span>Sucursal</span>
-              <select id="branchSelect" name="branchId" required></select>
-            </label>
-
-            <label class="field">
-              <span>Servicio</span>
-              <select id="procedureSelect" name="procedureId" required></select>
-            </label>
-
-            <p class="service-detail" id="serviceDetail"></p>
-          </li>
-
-          <li class="step" data-step="2">
-            <h2><span class="step-number">2</span> Dia</h2>
-
-            <label class="field">
-              <span>Fecha</span>
-              <input type="date" id="dateInput" name="date" required />
-            </label>
-
-            <div class="day-hint" id="dayHint"></div>
-          </li>
-
-          <li class="step" data-step="3">
-            <h2><span class="step-number">3</span> Hora</h2>
-            <div class="slots" id="slots" role="group" aria-label="Horarios disponibles"></div>
-            <p class="slots-empty" id="slotsEmpty">Elige primero una fecha.</p>
-          </li>
-
-          <li class="step" data-step="4">
-            <h2><span class="step-number">4</span> Tus datos</h2>
-
-            <label class="field">
-              <span>Nombre completo</span>
-              <input type="text" id="nameInput" name="clientName" autocomplete="name" required />
-            </label>
-
-            <label class="field">
-              <span>WhatsApp</span>
-              <input
-                type="tel"
-                id="phoneInput"
-                name="clientPhone"
-                inputmode="numeric"
-                autocomplete="tel"
-                placeholder="8888 8888"
-                required
-              />
-              <small>Ocho digitos. Es por donde te confirmamos.</small>
-            </label>
-
-            <label class="field">
-              <span>Correo</span>
-              <input
-                type="email"
-                id="emailInput"
-                name="clientEmail"
-                autocomplete="email"
-                placeholder="correo@dominio.com"
-                required
-              />
-            </label>
-
-            <label class="field">
-              <span>Algo que debamos saber <em>(opcional)</em></span>
-              <textarea id="notesInput" name="notes" rows="3" maxlength="400"></textarea>
-            </label>
-
-            <!-- Trampa para robots: invisible y fuera del recorrido del
-                 tabulador, asi que solo la rellena algo automatizado. -->
-            <div class="trap" aria-hidden="true">
-              <label>
-                No llenar
-                <input type="text" id="websiteInput" name="website" tabindex="-1" autocomplete="off" />
-              </label>
+        <section class="card is-active" data-step="service">
+          <div class="card-head">
+            <span class="card-index">1</span>
+            <h2>Servicio</h2>
+            <span class="card-picked" id="servicePicked"></span>
+            <svg class="card-check" viewBox="0 0 20 20" aria-hidden="true"><path d="M5 10.5l3.2 3.2L15 7" /></svg>
+          </div>
+          <div class="services" id="serviceGroup" role="radiogroup" aria-label="Elige el servicio">
+            <div class="services-loading" id="serviceLoading">
+              <span class="dot"></span><span class="dot"></span><span class="dot"></span>
             </div>
-          </li>
-        </ol>
+          </div>
+        </section>
 
-        <div class="summary" id="summary" hidden></div>
+        <section class="card is-locked" data-step="date">
+          <div class="card-head">
+            <span class="card-index">2</span>
+            <h2>Dia</h2>
+            <span class="card-picked" id="datePicked"></span>
+            <svg class="card-check" viewBox="0 0 20 20" aria-hidden="true"><path d="M5 10.5l3.2 3.2L15 7" /></svg>
+          </div>
+          <div class="days" id="dayStrip" role="radiogroup" aria-label="Elige el dia"></div>
+          <div class="date-more">
+            <button class="ghost-btn" type="button" id="moreDates">Otra fecha</button>
+            <label class="native-date" hidden>
+              <span class="visually-hidden">Elegir una fecha</span>
+              <input type="date" id="dateInput" />
+            </label>
+          </div>
+          <p class="hint" id="dayHint"></p>
+        </section>
 
-        <p class="form-error" id="formError" role="alert" aria-live="polite"></p>
+        <section class="card is-locked" data-step="time">
+          <div class="card-head">
+            <span class="card-index">3</span>
+            <h2>Hora</h2>
+            <span class="card-picked" id="timePicked"></span>
+            <svg class="card-check" viewBox="0 0 20 20" aria-hidden="true"><path d="M5 10.5l3.2 3.2L15 7" /></svg>
+          </div>
+          <div class="slots" id="slots" role="radiogroup" aria-label="Elige la hora"></div>
+          <p class="slots-empty" id="slotsEmpty">Elige primero un dia.</p>
+        </section>
 
-        <button class="submit" type="submit" id="submitButton" disabled>
-          <span id="submitLabel">Completa los pasos</span>
-        </button>
+        <section class="card is-locked" data-step="details">
+          <div class="card-head">
+            <span class="card-index">4</span>
+            <h2>Tus datos</h2>
+            <svg class="card-check" viewBox="0 0 20 20" aria-hidden="true"><path d="M5 10.5l3.2 3.2L15 7" /></svg>
+          </div>
 
-        <p class="disclaimer">
-          Al enviar, quedas anotada como <strong>solicitud</strong>. La cita se confirma cuando te
-          escribamos.
-        </p>
+          <label class="field">
+            <span>Nombre completo</span>
+            <input type="text" id="nameInput" autocomplete="name" required />
+          </label>
+
+          <label class="field">
+            <span>WhatsApp</span>
+            <input
+              type="tel"
+              id="phoneInput"
+              inputmode="numeric"
+              autocomplete="tel"
+              placeholder="8888 8888"
+              required
+            />
+            <small>Ocho digitos. Por aqui te confirmamos.</small>
+          </label>
+
+          <label class="field">
+            <span>Correo</span>
+            <input type="email" id="emailInput" autocomplete="email" placeholder="correo@dominio.com" required />
+          </label>
+
+          <label class="field">
+            <span>Algo que debamos saber <em>(opcional)</em></span>
+            <textarea id="notesInput" rows="2" maxlength="400"></textarea>
+          </label>
+
+          <div class="trap" aria-hidden="true">
+            <label>No llenar<input type="text" id="websiteInput" tabindex="-1" autocomplete="off" /></label>
+          </div>
+        </section>
       </form>
 
+      <p class="form-error" id="formError" role="alert" aria-live="polite"></p>
+
       <section class="done" id="done" hidden aria-live="polite">
-        <div class="done-mark" aria-hidden="true">✓</div>
-        <h2>Listo, recibimos tu solicitud</h2>
+        <div class="done-mark" aria-hidden="true">
+          <svg viewBox="0 0 52 52"><circle cx="26" cy="26" r="24" /><path d="M15 27l7.5 7.5L38 19" /></svg>
+        </div>
+        <h2>Recibimos tu solicitud</h2>
         <p id="doneDetail"></p>
-        <p class="done-note">
-          Te enviamos un correo con el resumen. Te escribimos pronto para confirmarte el horario.
-        </p>
-        <button class="secondary" type="button" id="againButton">Reservar otra cita</button>
+        <p class="done-note">Te enviamos un correo con el resumen. Te escribimos pronto para confirmarte el horario.</p>
+        <button class="ghost-btn" type="button" id="againButton">Reservar otra cita</button>
       </section>
     </main>
+
+    <div class="actionbar" id="actionbar" hidden>
+      <div class="actionbar-inner">
+        <div class="actionbar-summary" id="summary" aria-live="polite"></div>
+        <button class="cta" type="submit" form="bookingForm" id="submitButton" disabled>
+          <span id="submitLabel">Elige un servicio</span>
+          <svg class="cta-arrow" viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h11M11 5l5 5-5 5" /></svg>
+        </button>
+      </div>
+    </div>
 
     <script src="reservar.js"></script>
   </body>
