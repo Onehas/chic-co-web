@@ -98,13 +98,13 @@ const moduleWriteCollections = {
   clientes: ["clients"],
   inventario: ["products", "stockMovements", "locations"],
   procedimientos: ["procedures"],
-  enCurso: ["activeProcedures", "products", "stockMovements"],
+  enCurso: ["activeProcedures", "products", "stockMovements", "stations"],
   planes: ["plans", "activeProcedures", "appointments"],
   citas: ["appointments", "activeProcedures"],
   facturacion: ["invoices", "products", "stockMovements"],
   usuarios: ["users"]
 };
-const branchDataCollections = ["clients", "products", "procedures", "activeProcedures", "plans", "appointments", "invoices", "stockMovements", "locations"];
+const branchDataCollections = ["clients", "products", "procedures", "activeProcedures", "plans", "appointments", "invoices", "stockMovements", "locations", "stations"];
 const auditLogLimit = 300;
 
 const mimeTypes = {

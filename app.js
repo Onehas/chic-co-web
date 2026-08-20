@@ -92,7 +92,7 @@ const systemUserAuth = {
   },
   "USR-004": {}
 };
-const branchDataKeys = ["clients", "products", "procedures", "activeProcedures", "plans", "appointments", "invoices", "stockMovements", "locations"];
+const branchDataKeys = ["clients", "products", "procedures", "activeProcedures", "plans", "appointments", "invoices", "stockMovements", "locations", "stations"];
 
 const branchOptions = [
   { id: "rohrmoser", label: "Chic & Co Rohrmoser" },
@@ -150,7 +150,8 @@ function emptyBranchData() {
     appointments: [],
     invoices: [],
     stockMovements: [],
-    locations: []
+    locations: [],
+    stations: []
   };
 }
 
@@ -1056,6 +1057,17 @@ function textareaField(label, name, value = "") {
   `;
 }
 
+// Lista de <option>. Respeta `option.selected`, o un valor pasado aparte.
+function optionsHtml(options, selectedValue) {
+  return options
+    .map((option) => {
+      const isSelected =
+        selectedValue !== undefined ? String(option.value) === String(selectedValue) : Boolean(option.selected);
+      return `<option value="${escapeHtml(option.value)}" ${isSelected ? "selected" : ""}>${escapeHtml(option.label)}</option>`;
+    })
+    .join("");
+}
+
 function selectField(label, name, options, selectedValue = "", extra = "") {
   return `
     <label class="${fieldClass("field", extra)}">
@@ -1387,18 +1399,21 @@ const viewRenderers = {
   },
 
   enCurso(search) {
+    if (ensureStations()) storeStateLocally();
+
     const selectedClient = prefill.clientId || state.clients[0]?.id || "";
     const selectedProcedure = prefill.procedureId || state.procedures[0]?.id || "";
     const rows = state.activeProcedures
       .filter((item) =>
         matchesSearch(
-          [clientName(item.clientId), procedureName(item.procedureId), item.specialist, item.status, item.notes],
+          [clientName(item.clientId), procedureName(item.procedureId), item.specialist, item.status, item.notes, stationName(item.stationId)],
           search
         )
       )
       .map((item) => {
         const procedure = getProcedure(item.procedureId);
         const productId = procedure?.productId || "";
+        const stationSelect = `<select class="station-inline" data-station-select="${item.id}" aria-label="Estacion de ${escapeHtml(clientName(item.clientId))}">${optionsHtml(stationOptions(item.stationId || ""))}</select>`;
         return `
           <tr>
             <td>
@@ -1408,6 +1423,7 @@ const viewRenderers = {
               </div>
             </td>
             <td>${statusBadge(item.status)}<br />${escapeHtml(item.specialist)}</td>
+            <td>${canWrite("enCurso") ? stationSelect : escapeHtml(stationName(item.stationId) || "Sin estacion")}</td>
             <td>Inicio ${escapeHtml(item.started)}<br />Proxima ${escapeHtml(item.next || "Sin fecha")}</td>
             <td>${escapeHtml(item.notes)}<br />Producto: ${escapeHtml(productName(productId))}</td>
             <td>
@@ -1429,6 +1445,7 @@ const viewRenderers = {
           ${selectField("Cliente", "clientId", clientOptions(selectedClient), selectedClient, "required")}
           ${selectField("Procedimiento", "procedureId", procedureOptions(selectedProcedure), selectedProcedure, "required")}
           ${selectField("Especialista", "specialist", specialistOptions("Andrea Morales"), "Andrea Morales", "required")}
+          ${selectField("Estacion", "stationId", stationOptions(""), "")}
           ${inputField("Proxima accion", "next", "date", todayISO())}
           ${textareaField("Notas de la sesion", "notes")}
         </div>
@@ -1436,13 +1453,16 @@ const viewRenderers = {
       </form>
     `;
 
-    return renderLayout(
-      moduleMetrics("enCurso"),
-      "Iniciar procedimiento",
-      form,
-      "Seguimiento activo",
-      renderTable(["Cliente", "Estado", "Fechas", "Notas", "Acciones"], rows)
-    );
+    return `
+      ${renderStationBoard()}
+      ${renderLayout(
+        moduleMetrics("enCurso"),
+        "Iniciar procedimiento",
+        form,
+        "Seguimiento activo",
+        renderTable(["Cliente", "Estado", "Estacion", "Fechas", "Notas", "Acciones"], rows)
+      )}
+    `;
   },
 
   planes(search) {
@@ -1874,6 +1894,194 @@ function isLowStock(product) {
 }
 
 /* =====================================================================
+   Estaciones de trabajo (cabinas de estetica, sillas de unas y de pelo)
+   ---------------------------------------------------------------------
+   Una estacion es un puesto fisico donde se atiende. En "En curso" se ve el
+   tablero: cuales estan libres y cuales ocupadas, con quien y en que. La
+   ocupacion se deduce de los procedimientos activos: cada uno puede quedar
+   asignado a una estacion por su `stationId`. Son datos de sucursal, como las
+   ubicaciones de inventario.
+   ===================================================================== */
+
+const stationTypes = [
+  { id: "estetica", label: "Cabinas de estetica", one: "Cabina", icon: "&#10024;" },
+  { id: "unas", label: "Sillas de unas", one: "Silla de unas", icon: "&#128133;" },
+  { id: "peluqueria", label: "Sillas de peluqueria", one: "Silla de pelo", icon: "&#9986;" }
+];
+
+const defaultStationSeed = [
+  { type: "estetica", name: "Cabina 1" },
+  { type: "estetica", name: "Cabina 2" },
+  { type: "estetica", name: "Cabina 3" },
+  { type: "unas", name: "Silla de unas 1" },
+  { type: "unas", name: "Silla de unas 2" },
+  { type: "unas", name: "Silla de unas 3" },
+  { type: "unas", name: "Silla de unas 4" },
+  { type: "peluqueria", name: "Silla de pelo 1" },
+  { type: "peluqueria", name: "Silla de pelo 2" },
+  { type: "peluqueria", name: "Silla de pelo 3" }
+];
+
+function stationList() {
+  return Array.isArray(state.stations) ? state.stations : [];
+}
+
+// Siembra las estaciones habituales la primera vez que se entra a En curso, si
+// la sucursal todavia no tiene ninguna.
+function ensureStations() {
+  if (!Array.isArray(state.stations)) state.stations = [];
+  if (state.stations.length) return false;
+  state.stations = defaultStationSeed.map((seed, index) => ({
+    id: `EST-${String(index + 1).padStart(3, "0")}-${idSuffix()}`,
+    type: seed.type,
+    name: seed.name
+  }));
+  return true;
+}
+
+function stationById(id) {
+  return stationList().find((station) => station.id === id) || null;
+}
+
+function stationName(id) {
+  return stationById(id)?.name || "";
+}
+
+function stationTypeLabel(typeId) {
+  return stationTypes.find((type) => type.id === typeId)?.one || "Estacion";
+}
+
+// Procedimiento activo (sin finalizar) que ocupa una estacion, si hay alguno.
+function stationOccupant(stationId) {
+  return activeProcedures().find((item) => String(item.stationId || "") === String(stationId)) || null;
+}
+
+function stationOptions(selected = "") {
+  return [
+    { value: "", label: "Sin estacion asignada" },
+    ...stationList().map((station) => ({
+      value: station.id,
+      label: `${station.name} (${stationTypeLabel(station.type)})`,
+      selected: station.id === selected
+    }))
+  ];
+}
+
+// Tablero de estaciones para "En curso": una fila por tipo, con tarjetas que se
+// pintan libres u ocupadas y, si estan ocupadas, con quien y en que.
+function renderStationBoard() {
+  const canManage = canWrite("enCurso");
+  const groups = stationTypes
+    .map((type) => {
+      const stations = stationList().filter((station) => station.type === type.id);
+      const freeCount = stations.filter((station) => !stationOccupant(station.id)).length;
+      const cards = stations
+        .map((station) => {
+          const occ = stationOccupant(station.id);
+          if (occ) {
+            const paused = occ.status === "Pausado";
+            return `
+              <div class="station-card is-busy${paused ? " is-paused" : ""}">
+                <div class="station-top">
+                  <span class="station-name">${escapeHtml(station.name)}</span>
+                  <span class="station-pill is-busy">${paused ? "Pausada" : "Ocupada"}</span>
+                </div>
+                <div class="station-client">${escapeHtml(clientName(occ.clientId))}</div>
+                <div class="station-meta">${escapeHtml(procedureName(occ.procedureId))}</div>
+                <div class="station-meta station-with">Con ${escapeHtml(occ.specialist || "sin asignar")}</div>
+                <div class="station-since">Desde ${escapeHtml(occ.started || "hoy")}</div>
+                ${
+                  canManage
+                    ? `<button class="station-free" type="button" data-free-station="${occ.id}">Liberar</button>`
+                    : ""
+                }
+              </div>`;
+          }
+          return `
+            <div class="station-card is-free">
+              <div class="station-top">
+                <span class="station-name">${escapeHtml(station.name)}</span>
+                <span class="station-pill is-free">Disponible</span>
+              </div>
+              <div class="station-meta station-empty-hint">Libre ahora</div>
+              ${
+                canManage
+                  ? `<button class="station-remove" type="button" data-remove-station="${station.id}" title="Quitar estacion" aria-label="Quitar ${escapeHtml(station.name)}">&times;</button>`
+                  : ""
+              }
+            </div>`;
+        })
+        .join("");
+      return `
+        <section class="station-group">
+          <header class="station-group-head">
+            <h4>${type.icon} ${escapeHtml(type.label)}</h4>
+            <span class="station-count">${freeCount}/${stations.length} libres</span>
+          </header>
+          <div class="station-cards">
+            ${stations.length ? cards : `<p class="station-empty">Sin estaciones de este tipo.</p>`}
+          </div>
+        </section>`;
+    })
+    .join("");
+
+  const manage = canManage
+    ? `
+      <form class="station-add" data-add-station>
+        <input type="text" name="stationName" placeholder="Nombre de la estacion" maxlength="40" required />
+        <select name="stationType" aria-label="Tipo de estacion">
+          ${stationTypes.map((type) => `<option value="${type.id}">${type.label}</option>`).join("")}
+        </select>
+        <button class="secondary-action" type="submit">Agregar</button>
+      </form>`
+    : "";
+
+  return `
+    <section class="station-board">
+      <div class="station-board-head">
+        <h3>Estaciones</h3>
+        <p>Cabinas y sillas de la sucursal: quien esta libre y quien esta trabajando.</p>
+      </div>
+      <div class="station-groups">${groups}</div>
+      ${manage}
+    </section>`;
+}
+
+// Libera la estacion de un procedimiento activo sin finalizarlo.
+function freeStationOccupant(activeId) {
+  const active = state.activeProcedures.find((item) => item.id === activeId);
+  if (!active) return;
+  active.stationId = "";
+  persistAndRender("Estacion liberada");
+}
+
+// Asigna (o cambia) la estacion de un procedimiento activo.
+function setActiveStation(activeId, stationId) {
+  const active = state.activeProcedures.find((item) => item.id === activeId);
+  if (!active) return;
+  active.stationId = stationId || "";
+  persistAndRender(stationId ? "Estacion asignada" : "Estacion liberada");
+}
+
+function addStation(name, type) {
+  const cleanName = String(name || "").trim();
+  if (!cleanName) return;
+  if (!Array.isArray(state.stations)) state.stations = [];
+  const validType = stationTypes.some((item) => item.id === type) ? type : stationTypes[0].id;
+  state.stations.push({ id: `EST-${String(state.stations.length + 1).padStart(3, "0")}-${idSuffix()}`, type: validType, name: cleanName });
+  persistAndRender("Estacion agregada");
+}
+
+function removeStation(stationId) {
+  if (stationOccupant(stationId)) {
+    showToast("Esa estacion esta ocupada. Liberala antes de quitarla.");
+    return;
+  }
+  state.stations = stationList().filter((station) => station.id !== stationId);
+  persistAndRender("Estacion eliminada");
+}
+
+/* =====================================================================
    Fotos de producto
    ---------------------------------------------------------------------
    Las imágenes no viajan dentro de `state`: el estado completo se envía en
@@ -2156,6 +2364,7 @@ function addActiveProcedure(data) {
     clientId: data.clientId,
     procedureId: data.procedureId,
     specialist: data.specialist.trim(),
+    stationId: data.stationId || "",
     status: "En progreso",
     started: todayISO(),
     next: data.next || todayISO(),
@@ -2405,6 +2614,8 @@ function handleRowActions(event) {
   const completeAppointment = event.target.closest("[data-complete-appointment]");
   const switchUserButton = event.target.closest("[data-switch-user]");
   const toggleUserButton = event.target.closest("[data-toggle-user]");
+  const freeStationButton = event.target.closest("[data-free-station]");
+  const removeStationButton = event.target.closest("[data-remove-station]");
 
   if (switchUserButton) {
     switchUser(switchUserButton.dataset.switchUser);
@@ -2435,10 +2646,22 @@ function handleRowActions(event) {
     planPay,
     confirmAppointment,
     startAppointment,
-    completeAppointment
+    completeAppointment,
+    freeStationButton,
+    removeStationButton
   ].some(Boolean);
 
   if (needsWrite && !requireWrite(currentModule)) return;
+
+  if (freeStationButton) {
+    freeStationOccupant(freeStationButton.dataset.freeStation);
+    return;
+  }
+
+  if (removeStationButton) {
+    removeStation(removeStationButton.dataset.removeStation);
+    return;
+  }
 
   if (createPlanClient) {
     prefill = { clientId: createPlanClient.dataset.createPlanClient };
@@ -3058,6 +3281,22 @@ document.addEventListener("click", (event) => {
 document.addEventListener("change", (event) => {
   const photoInput = event.target.closest("[data-photo-input]");
   if (photoInput) handlePhotoSelection(photoInput);
+
+  const stationSelect = event.target.closest("[data-station-select]");
+  if (stationSelect) {
+    if (!requireWrite("enCurso")) return;
+    setActiveStation(stationSelect.dataset.stationSelect, stationSelect.value);
+  }
+});
+
+// Alta de estacion desde el tablero de En curso (su propio form, no un .data-form).
+document.addEventListener("submit", (event) => {
+  const addForm = event.target.closest("[data-add-station]");
+  if (!addForm) return;
+  event.preventDefault();
+  if (!requireWrite("enCurso")) return;
+  const data = Object.fromEntries(new FormData(addForm).entries());
+  addStation(data.stationName, data.stationType);
 });
 
 document.addEventListener("keydown", (event) => {
