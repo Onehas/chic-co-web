@@ -306,10 +306,10 @@
         display: grid;
         gap: 14px;
         padding: 16px;
-        background: rgba(255, 255, 255, 0.74);
-        border: 1px solid rgba(31, 34, 31, 0.08);
+        background: var(--surface);
+        border: 1px solid var(--line);
         border-radius: 8px;
-        box-shadow: 0 12px 32px rgba(25, 28, 24, 0.07);
+        box-shadow: var(--shadow-2);
       }
       .hacienda-phase3-heading,
       .hacienda-phase3-actions,
@@ -333,7 +333,7 @@
         font-weight: 800;
       }
       .hacienda-phase3-heading strong {
-        color: #252928;
+        color: var(--ink);
         font-size: 20px;
       }
       .hacienda-phase3-form {
@@ -349,12 +349,12 @@
         display: grid;
         gap: 12px;
         min-height: 54px;
-        color: #25302e;
+        color: var(--ink);
         font-size: 13px;
         font-weight: 800;
       }
       .hacienda-phase3-summary {
-        color: #25302e;
+        color: var(--ink);
       }
       .hacienda-phase3-grid {
         display: grid;
@@ -370,7 +370,7 @@
       }
       .hacienda-phase3-grid strong {
         overflow-wrap: anywhere;
-        color: #252928;
+        color: var(--ink);
         font-size: 13px;
       }
       .hacienda-phase3-findings {
@@ -380,21 +380,21 @@
       .hacienda-phase3-finding {
         padding: 10px 12px;
         border-radius: 8px;
-        background: rgba(220, 234, 231, 0.5);
-        color: #183d38;
+        background: var(--ok-soft);
+        color: var(--ok);
       }
       .hacienda-phase3-finding.is-warning {
-        background: rgba(221, 209, 184, 0.48);
-        color: #6f4f20;
+        background: var(--warn-soft);
+        color: var(--warn);
       }
       .hacienda-phase3-finding.is-error,
       .hacienda-badge.is-error {
-        background: rgba(255, 220, 214, 0.72);
-        color: #7e2d23;
+        background: var(--crit-soft);
+        color: var(--crit);
       }
       .hacienda-badge.is-warning {
         background: rgba(221, 209, 184, 0.56);
-        color: #6f4f20;
+        color: var(--warn);
       }
       .hacienda-phase3-documents {
         overflow-x: auto;

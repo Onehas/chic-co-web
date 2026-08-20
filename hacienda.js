@@ -427,10 +427,10 @@
         gap: 8px;
         min-height: 128px;
         padding: 16px;
-        background: rgba(255, 255, 255, 0.78);
-        border: 1px solid rgba(31, 34, 31, 0.08);
+        background: var(--surface);
+        border: 1px solid var(--line);
         border-radius: 8px;
-        box-shadow: 0 12px 32px rgba(25, 28, 24, 0.07);
+        box-shadow: var(--shadow-2);
       }
       .hacienda-card span,
       .hacienda-card small {
@@ -439,7 +439,7 @@
         font-weight: 800;
       }
       .hacienda-card strong {
-        color: #252928;
+        color: var(--ink);
         font-size: 20px;
       }
       .hacienda-badges,
@@ -453,25 +453,25 @@
         align-items: center;
         min-height: 28px;
         padding: 0 10px;
-        color: #25302e;
+        color: var(--ink);
         background: rgba(220, 234, 231, 0.8);
         border-radius: 999px;
         font-size: 12px;
         font-weight: 800;
       }
       .hacienda-badge.is-ok {
-        color: #0f453d;
+        color: var(--ok);
         background: rgba(155, 201, 195, 0.38);
       }
       .hacienda-badge.is-muted {
-        color: #6f6251;
+        color: var(--warn);
         background: rgba(221, 209, 184, 0.42);
       }
       .hacienda-alert {
         padding: 12px 14px;
-        color: #26302e;
-        background: rgba(255, 255, 255, 0.74);
-        border: 1px solid rgba(31, 34, 31, 0.08);
+        color: var(--ink);
+        background: var(--surface);
+        border: 1px solid var(--line);
         border-radius: 8px;
         font-size: 13px;
         font-weight: 800;
@@ -489,7 +489,7 @@
         width: 18px;
         height: 18px;
         min-height: 18px;
-        accent-color: #111514;
+        accent-color: var(--brand);
       }
       .hacienda-switch span {
         margin: 0;
