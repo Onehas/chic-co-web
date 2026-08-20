@@ -561,7 +561,8 @@
     }, immediate ? 0 : 250);
   };
 
-  syncStateToBackend = async function ({ force = false, keepalive = false, isRetry = false } = {}) {
+  syncStateToBackend = async function ({ force = false, keepalive = false, retryCount = 0 } = {}) {
+    const isRetry = retryCount > 0;
     if ((!isBackendAvailable() && !force) || !backendAuthToken()) return;
     if (bridgeSaveInFlight && !isRetry) {
       bridgeSaveQueued = true;
@@ -582,13 +583,19 @@
       showSyncSavedToast();
     } catch (error) {
       // Otro usuario guardo primero. Se fusionan los cambios de este navegador
-      // sobre el estado del servidor y se reintenta una sola vez.
-      if (error.status === 409 && error.payload?.state && !isRetry) {
+      // sobre el estado del servidor y se reintenta, re-fusionando en cada
+      // choque con un backoff pequeno, hasta agotar los reintentos. Un solo
+      // reintento perdia trabajo bajo tres o mas escritores concurrentes.
+      const maxSyncRetries = 5;
+      if (error.status === 409 && error.payload?.state && retryCount < maxSyncRetries) {
         state = mergeAgainstServer(bridgeLastSyncedState, state, error.payload.state);
         storeStateLocally();
         if (document.body.classList.contains("is-authenticated")) renderAll();
         bridgeSaveInFlight = false;
-        return syncStateToBackend({ force: true, keepalive, isRetry: true });
+        if (retryCount > 0) {
+          await new Promise((resolve) => setTimeout(resolve, 60 * retryCount));
+        }
+        return syncStateToBackend({ force: true, keepalive, retryCount: retryCount + 1 });
       }
 
       if (error.status === 409) {

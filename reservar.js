@@ -487,6 +487,30 @@
   el.form.addEventListener("submit", submit);
   el.again.addEventListener("click", restart);
 
+  // Navegacion con flechas dentro de cada grupo de opciones (servicio, dia,
+  // hora). Es aditiva: el Tab sigue llegando a cada opcion; las flechas mueven
+  // el foco a la vecina y la seleccionan, como espera el patron de radiogroup.
+  [el.branchGroup, el.serviceGroup, el.dayStrip, el.slots].forEach((group) => {
+    if (!group) return;
+    group.addEventListener("keydown", (event) => {
+      const keys = ["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"];
+      if (!keys.includes(event.key)) return;
+      const options = [...group.querySelectorAll('[role="radio"]')].filter(
+        (node) => !node.disabled && node.offsetParent !== null
+      );
+      if (!options.length) return;
+      const current = options.indexOf(document.activeElement);
+      let next;
+      if (event.key === "Home") next = 0;
+      else if (event.key === "End") next = options.length - 1;
+      else if (event.key === "ArrowRight" || event.key === "ArrowDown") next = (current + 1 + options.length) % options.length;
+      else next = (current - 1 + options.length) % options.length;
+      event.preventDefault();
+      options[next].focus();
+      options[next].click();
+    });
+  });
+
   /* --- Arranque -------------------------------------------------------- */
 
   async function loadBranding() {

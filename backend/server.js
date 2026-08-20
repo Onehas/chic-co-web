@@ -30,13 +30,13 @@ const loginAttempts = new Map();
 const realtimeClients = new Map();
 let realtimeRevision = 0;
 
-// Las contrasenas reales deben venir de variables de entorno del proveedor.
-// Los valores por defecto solo existen para no romper instalaciones anteriores
-// y deben rotarse: estan publicados en el historial del repositorio.
-const receptionPasswordHash =
-  process.env.CHIC_RECEPCION_PASSWORD_HASH || "5813f24ae4432b277c8c92a78bf035caaa8f5a9ad0031441f5eccd2d4c0e2fd0";
-const monicaPasswordHash =
-  process.env.CHIC_MONICA_PASSWORD_HASH || "e7d081ee45073bc0da9fd633a609db90be0adc2abac6ac47e79e375544e81c22";
+// Las contrasenas reales vienen de variables de entorno del proveedor. Ya no se
+// hornea ningun hash por defecto: los que habia eran sha256 sin sal y estaban
+// publicados en el historial del repositorio, asi que cualquiera con acceso de
+// lectura podia romperlos offline. Sin la variable, la cuenta arranca sin hash y
+// no puede entrar hasta que un super usuario le fije la contrasena desde la app.
+const receptionPasswordHash = process.env.CHIC_RECEPCION_PASSWORD_HASH || "";
+const monicaPasswordHash = process.env.CHIC_MONICA_PASSWORD_HASH || "";
 const bootstrapEmail = String(process.env.CHIC_BOOTSTRAP_EMAIL || "").trim().toLowerCase();
 const bootstrapPassword = String(process.env.CHIC_BOOTSTRAP_PASSWORD || "");
 
@@ -52,11 +52,10 @@ const systemUserAuth = {
     function: "Super usuario",
     permissions: superUserPermissions
   },
-  "USR-001": {
-    role: "super",
-    function: "Super usuario",
-    permissions: superUserPermissions
-  },
+  // USR-001 ya NO se fija como super. Antes quedaba como un segundo super
+  // permanente e imposible de degradar desde la app; si alguien le ponia correo
+  // y contrasena, tenia acceso total. Se deja fuera de las cuentas de sistema
+  // para que sea una cuenta normal, editable como cualquier otra.
   "USR-002": {
     name: "Recepcion",
     email: "recepcion@chicnco.cr",
@@ -527,6 +526,13 @@ function mergeStockOnlyProducts(nextProducts, currentProducts) {
     if (!incoming) return product;
     const stock = Number(incoming.stock);
     if (!Number.isFinite(stock) || stock < 0) return product;
+    // Estos modulos (facturacion, en-curso) solo DESCUENTAN stock al vender o
+    // consumir producto. Nunca lo suben: subir existencias es administrar
+    // inventario, y eso queda para quien tiene ese permiso. Por eso un valor
+    // mayor al actual se ignora: evita que un usuario de facturacion infle las
+    // existencias, con intencion o por un bug del cliente.
+    const currentStock = Number(product.stock);
+    if (Number.isFinite(currentStock) && stock > currentStock) return product;
     return { ...product, stock };
   });
 }

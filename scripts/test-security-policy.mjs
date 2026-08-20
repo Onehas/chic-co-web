@@ -151,6 +151,14 @@ badStock.branches.rohrmoser.products = badStock.products;
 const badResult = applyWritePolicy(badStock, stockCurrent, { userId: "USR-003" });
 assert.equal(badResult.products[0].stock, 10, "ignora un stock negativo");
 
+// Facturar solo descuenta: recepcion nunca puede INFLAR el stock por encima del
+// actual. Si el documento entrante trae mas stock del que hay, se ignora.
+const upStock = structuredClone(stockCurrent);
+upStock.products = [{ id: "PRD-1", name: "Peroxido", stock: 999, min: 2, price: 5000, cost: 3000 }];
+upStock.branches.rohrmoser.products = upStock.products;
+const upResult = applyWritePolicy(upStock, stockCurrent, { userId: "USR-003" });
+assert.equal(upResult.products[0].stock, 10, "no puede subir el stock, solo descontarlo");
+
 // Quien si administra inventario conserva control total.
 const invUser = baseState();
 invUser.products = stockCurrent.products;

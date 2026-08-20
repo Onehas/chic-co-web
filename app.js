@@ -646,13 +646,30 @@ function dateToISO(date) {
   return `${year}-${month}-${day}`;
 }
 
+// Sufijo aleatorio colision-resistente para el id. Sin esto, dos sesiones que
+// parten de la misma lista generan el MISMO id para registros distintos y la
+// fusion los trata como uno solo: uno pisa al otro de forma permanente y sin
+// avisar. El id es la identidad; el numero de secuencia es solo legibilidad.
+function idSuffix() {
+  try {
+    if (typeof crypto !== "undefined" && crypto.randomUUID) {
+      return crypto.randomUUID().replace(/-/g, "").slice(0, 6);
+    }
+  } catch (error) {
+    /* contexto sin crypto: caemos al aleatorio de abajo */
+  }
+  return Math.random().toString(36).slice(2, 8).padStart(6, "0");
+}
+
 function nextId(prefix, list) {
+  // parseInt (no Number) lee el numero inicial aunque el id lleve sufijo,
+  // asi la secuencia visible sigue avanzando.
   const nextNumber =
     list.reduce((max, item) => {
-      const number = Number(String(item.id).replace(`${prefix}-`, ""));
+      const number = parseInt(String(item.id).replace(`${prefix}-`, ""), 10);
       return Number.isFinite(number) ? Math.max(max, number) : max;
     }, 0) + 1;
-  return `${prefix}-${String(nextNumber).padStart(3, "0")}`;
+  return `${prefix}-${String(nextNumber).padStart(3, "0")}-${idSuffix()}`;
 }
 
 function money(value) {
@@ -1661,9 +1678,13 @@ const viewRenderers = {
             <td><div class="permission-list">${permissionBadges}</div></td>
             <td>
               <div class="inline-actions">
-                <button class="row-action" type="button" data-switch-user="${user.id}">
-                  ${user.id === state.currentUserId ? "Actual" : "Usar cuenta"}
-                </button>
+                ${
+                  user.id === state.currentUserId
+                    ? `<button class="row-action" type="button" disabled>Actual</button>`
+                    : user.email
+                      ? `<button class="row-action" type="button" data-switch-user="${user.id}">Usar cuenta</button>`
+                      : `<button class="row-action" type="button" disabled title="Esta cuenta no tiene correo configurado">Sin correo</button>`
+                }
                 <button class="row-action is-muted" type="button" data-toggle-user="${user.id}">
                   ${user.active ? "Pausar" : "Activar"}
                 </button>

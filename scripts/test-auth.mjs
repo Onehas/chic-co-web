@@ -40,9 +40,16 @@ assert.equal(escalated.users[0].permissions.usuarios.write, false, "los permisos
 // Pero la contrasena guardada se respeta: por eso se puede cambiar.
 assert.equal(escalated.users[0].passwordHash, "propio", "conserva el hash elegido por el usuario");
 
-// Solo cuando la cuenta no tiene hash se aplica el valor de arranque.
+// Ya no se hornea ninguna contrasena por defecto. Sin la variable de entorno,
+// una cuenta de sistema sin hash sigue sin hash y no puede entrar hasta que un
+// super usuario le fije la contrasena desde la app.
 const seeded = applySystemUserAuth({ users: [{ id: "USR-002", passwordHash: "" }] });
-assert.ok(seeded.users[0].passwordHash, "una cuenta de sistema sin hash recibe el de arranque");
+assert.equal(seeded.users[0].passwordHash, "", "sin variable de entorno no hay contrasena por defecto");
+
+// USR-001 ya no es una cuenta super de sistema: se puede administrar como
+// cualquier otra, sin que el servidor le re-fije el rol super.
+const legacy = applySystemUserAuth({ users: [{ id: "USR-001", role: "recepcion", passwordHash: "x" }] });
+assert.notEqual(legacy.users[0].role, "super", "USR-001 no queda fijado como super");
 
 /* --- Estado inicial ----------------------------------------------------- */
 
