@@ -68,7 +68,12 @@
   }
 
   function todayISO() {
-    return new Date().toISOString().slice(0, 10);
+    // Costa Rica es UTC-6 todo el año (sin horario de verano). Sin este ajuste,
+    // entre las 18:00 y medianoche el navegador (en UTC) ya marca el dia
+    // siguiente: la tira de dias omitia "hoy" y el minimo del calendario
+    // saltaba a mañana. Se calcula el dia con el offset de CR.
+    const crMs = Date.now() - 6 * 60 * 60 * 1000;
+    return new Date(crMs).toISOString().slice(0, 10);
   }
 
   function addDays(iso, n) {
@@ -367,15 +372,21 @@
         })
       });
 
+      trackConversion();
       el.doneDetail.textContent = `${procedure()?.name || "Tu cita"} · ${longDate(sel.date)} a las ${sel.time}`;
       el.form.hidden = true;
       el.actionbar.hidden = true;
       el.done.hidden = false;
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (error) {
-      // 409 = el hueco se ocupo entre elegir y enviar: recargar horarios.
+      // 409 = el hueco se ocupo entre elegir y enviar: limpiar la hora elegida
+      // (para que el resumen no siga mostrando un cupo que ya no existe) y
+      // recargar los horarios.
       el.error.textContent = error.message;
-      if (error.status === 409) loadSlots();
+      if (error.status === 409) {
+        sel.time = "";
+        loadSlots();
+      }
     } finally {
       sending = false;
       refresh();
@@ -532,11 +543,78 @@
     }
   }
 
+  /* --- Pixeles de marketing ------------------------------------------------
+     El admin configura los ids desde la app; aqui solo se cargan si existen.
+     PageView al abrir el enlace y una conversion cuando se solicita la cita,
+     para poder medir el recorrido del cliente de punta a punta. Cada carga va
+     en su propio try: un pixel mal configurado nunca rompe la reserva. */
+
+  function loadMetaPixel(id) {
+    if (window.fbq) return;
+    /* eslint-disable */
+    (function (f, b, e, v, n, t, s) {
+      f.fbq = n = function () { n.callMethod ? n.callMethod.apply(n, arguments) : n.queue.push(arguments); };
+      if (!f._fbq) f._fbq = n;
+      n.push = n; n.loaded = true; n.version = "2.0"; n.queue = [];
+      t = b.createElement(e); t.async = true; t.src = v;
+      s = b.getElementsByTagName(e)[0]; s.parentNode.insertBefore(t, s);
+    })(window, document, "script", "https://connect.facebook.net/en_US/fbevents.js");
+    /* eslint-enable */
+    window.fbq("init", id);
+    window.fbq("track", "PageView");
+  }
+
+  function loadGA4(id) {
+    const script = document.createElement("script");
+    script.async = true;
+    script.src = "https://www.googletagmanager.com/gtag/js?id=" + encodeURIComponent(id);
+    document.head.appendChild(script);
+    window.dataLayer = window.dataLayer || [];
+    window.gtag = function () { window.dataLayer.push(arguments); };
+    window.gtag("js", new Date());
+    window.gtag("config", id);
+  }
+
+  function loadTikTokPixel(id) {
+    /* eslint-disable */
+    (function (w, d, t) {
+      w.TiktokAnalyticsObject = t;
+      var ttq = (w[t] = w[t] || []);
+      ttq.methods = ["page", "track", "identify", "instances", "debug", "on", "off", "once", "ready", "alias", "group", "enableCookie", "disableCookie"];
+      ttq.setAndDefer = function (a, b) { a[b] = function () { a.push([b].concat(Array.prototype.slice.call(arguments, 0))); }; };
+      for (var i = 0; i < ttq.methods.length; i++) ttq.setAndDefer(ttq, ttq.methods[i]);
+      ttq.load = function (e) {
+        var r = "https://analytics.tiktok.com/i18n/pixel/events.js";
+        ttq._i = ttq._i || {}; ttq._i[e] = []; ttq._i[e]._u = r; ttq._t = ttq._t || {}; ttq._t[e] = +new Date();
+        var o = d.createElement("script"); o.type = "text/javascript"; o.async = true; o.src = r + "?sdkid=" + e + "&lib=" + t;
+        var a = d.getElementsByTagName("script")[0]; a.parentNode.insertBefore(o, a);
+      };
+      ttq.load(id); ttq.page();
+    })(window, document, "ttq");
+    /* eslint-enable */
+  }
+
+  function initTracking(tracking) {
+    if (!tracking) return;
+    try { if (tracking.metaPixelId) loadMetaPixel(tracking.metaPixelId); } catch (error) { /* pixel opcional */ }
+    try { if (tracking.ga4Id) loadGA4(tracking.ga4Id); } catch (error) { /* pixel opcional */ }
+    try { if (tracking.tiktokPixelId) loadTikTokPixel(tracking.tiktokPixelId); } catch (error) { /* pixel opcional */ }
+  }
+
+  // Conversion cuando el cliente solicita la cita. Se usan eventos estandar
+  // para que Meta/Google/TikTok los reconozcan como leads/citas.
+  function trackConversion() {
+    try { if (window.fbq) window.fbq("track", "Schedule"); } catch (error) { /* ignore */ }
+    try { if (window.gtag) window.gtag("event", "generate_lead", { currency: "CRC" }); } catch (error) { /* ignore */ }
+    try { if (window.ttq) window.ttq.track("SubmitForm"); } catch (error) { /* ignore */ }
+  }
+
   (async () => {
     loadBranding();
     try {
       const result = await api("/api/public/config");
       config = result.config;
+      initTracking(config.tracking);
       fillBranches();
       buildDayStrip();
       el.actionbar.hidden = false;

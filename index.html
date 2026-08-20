@@ -45,8 +45,8 @@
             <input id="loginPassword" name="password" type="password" autocomplete="current-password" required />
           </label>
 
-          <p class="login-error" id="loginError" role="alert" aria-live="polite"></p>
-          <button class="primary-action" type="submit">Entrar</button>
+          <p class="login-error" id="loginError" role="alert"></p>
+          <button class="primary-action" type="submit" id="loginSubmit">Entrar</button>
         </form>
       </div>
     </section>
@@ -63,7 +63,7 @@
       <nav class="main-nav" aria-label="Navegacion principal">
         <button class="nav-link" type="button" data-menu="sucursal" aria-haspopup="menu" aria-expanded="false" aria-controls="dropdownLayer">
           <span class="branch-dot" aria-hidden="true"></span>
-          Sucursal
+          <span id="currentBranchName">Sucursal</span>
           <span class="chevron">v</span>
         </button>
       </nav>
@@ -362,6 +362,7 @@
     <script src="account-switch.js"></script>
     <script src="branding.js"></script>
     <script src="billing-alegra.js"></script>
+    <script src="marketing-pixels.js"></script>
     <script src="production-tools.js"></script>
     <script>
       // Conmutador de tema: automatico -> claro -> oscuro -> automatico.

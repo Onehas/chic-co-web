@@ -811,6 +811,13 @@ body.is-authenticated .login-screen {
   border-radius: var(--radius-sm);
 }
 
+/* El input quita su propio outline; el anillo de foco por teclado se pinta en
+   la caja para que se vea a donde llego el foco. */
+.search-box:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
 .search-box span {
   color: var(--ink-3);
   font-size: 12px;

@@ -363,6 +363,7 @@ const elements = {
   reasonCancelButton: document.querySelector("#reasonCancelButton"),
   reasonSecondaryCancelButton: document.querySelector("#reasonSecondaryCancelButton"),
   currentUserName: document.querySelector("#currentUserName"),
+  currentBranchName: document.querySelector("#currentBranchName"),
   loginScreen: document.querySelector("#loginScreen"),
   loginForm: document.querySelector("#loginForm"),
   loginEmail: document.querySelector("#loginEmail"),
@@ -865,10 +866,16 @@ function openStockReasonModal(productId) {
   elements.reasonProductName.textContent = `${product.name} | Stock actual: ${product.stock} ${product.unit}`;
   elements.reasonText.value = "";
   updateReasonWordCount();
+  reasonModalReturnFocus = document.activeElement;
   elements.reasonModal.classList.add("is-open");
   elements.reasonModal.setAttribute("aria-hidden", "false");
+  // El fondo queda inerte para que el foco no se escape por detras del modal,
+  // igual que el drawer y los demas modales.
+  document.querySelectorAll(".topbar, .app-shell").forEach((region) => (region.inert = true));
   setTimeout(() => elements.reasonText.focus(), 80);
 }
+
+let reasonModalReturnFocus = null;
 
 function closeStockReasonModal() {
   pendingStockUseProductId = "";
@@ -876,6 +883,9 @@ function closeStockReasonModal() {
   elements.reasonModal.setAttribute("aria-hidden", "true");
   elements.reasonText.value = "";
   updateReasonWordCount();
+  document.querySelectorAll(".topbar, .app-shell").forEach((region) => (region.inert = false));
+  if (reasonModalReturnFocus instanceof HTMLElement) reasonModalReturnFocus.focus();
+  reasonModalReturnFocus = null;
 }
 
 function setModule(moduleName, options = {}) {
@@ -908,6 +918,12 @@ function renderAll() {
 function renderActiveUser() {
   const user = currentUser();
   elements.currentUserName.textContent = user ? user.name : "Usuario";
+  // Mostrar la sucursal activa en la barra: los datos cambian por sucursal, asi
+  // que saber donde se esta operando de un vistazo evita errores.
+  if (elements.currentBranchName) {
+    const branch = branchOptions.find((item) => item.id === state.currentBranchId);
+    elements.currentBranchName.textContent = branch?.label || "Sucursal";
+  }
 }
 
 function renderModuleAccess() {
@@ -1047,7 +1063,17 @@ function renderLayout(stats, formTitle, formHtml, recordsTitle, recordsHtml) {
 }
 
 function renderTable(headers, rows) {
-  if (!rows.length) return `<div class="empty-state">No hay registros para mostrar con ese filtro.</div>`;
+  if (!rows.length) {
+    // "Con ese filtro" solo tiene sentido si de verdad hay una busqueda o un
+    // filtro activo; en una lista recien creada confunde.
+    const searching = (elements.searchInput?.value || "").trim().length > 0;
+    const filtering = currentModule === "inventario" && inventoryFilter !== "all";
+    const message =
+      searching || filtering
+        ? "No hay registros que coincidan con la busqueda o el filtro."
+        : "Aun no hay registros aqui. Crea el primero con el formulario de la izquierda.";
+    return `<div class="empty-state">${message}</div>`;
+  }
   return `
     <div class="table-wrap">
       <table>
@@ -3265,7 +3291,10 @@ function openPlaceDrawer(productId) {
   drawerElements.submit.hidden = false;
   drawerReturnFocus = document.activeElement;
   document.body.classList.add("drawer-open");
-  drawerElements.root.setAttribute("aria-hidden", "false");
+  // setDrawerInert activa el panel y vuelve inerte el fondo. Sin esto el drawer
+  // quedaba con inert=true de su estado cerrado y no se podia ni enfocar ni
+  // tocar ningun campo.
+  setDrawerInert(true);
   window.setTimeout(() => drawerElements.body.querySelector("select")?.focus(), 220);
 }
 
@@ -3316,7 +3345,10 @@ function openLocationsDrawer() {
   drawerElements.submit.hidden = false;
   drawerReturnFocus = document.activeElement;
   document.body.classList.add("drawer-open");
-  drawerElements.root.setAttribute("aria-hidden", "false");
+  // Igual que openPlaceDrawer: sin setDrawerInert el panel quedaba inerte y no
+  // se podia editar ni agregar ubicaciones.
+  setDrawerInert(true);
+  window.setTimeout(() => drawerElements.body.querySelector("input, select, textarea")?.focus(), 220);
 }
 
 function saveLocationsDrawer() {
