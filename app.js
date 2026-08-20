@@ -701,6 +701,23 @@ function currentUser() {
   return state.users.find((user) => user.id === state.currentUserId) || state.users[0];
 }
 
+// Estado de la factura frente a Alegra. El envio real lo hace billing-alegra.js;
+// aqui solo se dibuja la celda con su estado o el boton para enviarla.
+function alegraCell(invoice) {
+  const info = invoice.alegra;
+  if (info?.status === "sent") {
+    const label = info.number ? `Alegra ${escapeHtml(info.number)}` : "Enviada";
+    return info.url
+      ? `<a class="alegra-badge is-sent" href="${escapeHtml(info.url)}" target="_blank" rel="noopener noreferrer">${label}</a>`
+      : `<span class="alegra-badge is-sent">${label}</span>`;
+  }
+  const retry = info?.status === "error" ? " is-retry" : "";
+  const text = info?.status === "error" ? "Reintentar" : "Enviar a Alegra";
+  return `<button class="row-action alegra-send${retry}" type="button" data-alegra-send="${escapeHtml(invoice.id)}">${text}</button>${
+    info?.status === "error" ? `<span class="alegra-note">${escapeHtml(info.reason || "Fallo el envio")}</span>` : ""
+  }`;
+}
+
 function canView(moduleName) {
   const user = currentUser();
   return Boolean(user?.active && user.permissions?.[moduleName]?.read);
@@ -1574,6 +1591,7 @@ const viewRenderers = {
             <td>Subtotal ${money(subtotal)}<br />IVA ${escapeHtml(invoice.ivaRate)}%: ${money(iva)}</td>
             <td>Total ${money(total)}<br />Pago ${money(invoice.paid)}<br />Metodo ${escapeHtml(paymentMethodLabel(invoice.paymentMethod))}<br />${balance >= 0 ? "Cambio" : "Saldo"} ${money(Math.abs(balance))}</td>
             <td>${escapeHtml(invoice.notes)}</td>
+            <td data-alegra-cell="${escapeHtml(invoice.id)}">${alegraCell(invoice)}</td>
           </tr>
         `;
       });
@@ -1615,7 +1633,7 @@ const viewRenderers = {
       "Nueva factura",
       form,
       "Historial de facturacion",
-      renderTable(["Factura", "Tratamiento", "Productos", "Montos", "IVA", "Pago", "Notas"], rows)
+      renderTable(["Factura", "Tratamiento", "Productos", "Montos", "IVA", "Pago", "Notas", "Alegra"], rows)
     );
   },
 
@@ -2724,7 +2742,9 @@ function dropdownOptions(menuName) {
     const switchers =
       activeUser.role === "super"
         ? state.users
-            .filter((user) => user.active && user.id !== state.currentUserId)
+            // Solo cuentas con correo: cambiar a otra persona hace un login real
+            // con su contrasena, y sin correo no hay con que iniciar sesion.
+            .filter((user) => user.active && user.id !== state.currentUserId && String(user.email || "").trim())
             .map((user) => ({ label: `Cambiar a ${user.name}`, switchUser: user.id }))
         : [];
     return [{ label: `${activeUser.name} - ${roleLabel(activeUser.role)}` }, ...switchers];

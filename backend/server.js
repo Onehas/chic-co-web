@@ -9,6 +9,8 @@ const bookingStore = require("./booking-store");
 const publicBooking = require("./public-booking");
 const mailer = require("./mailer");
 const dailyReport = require("./daily-report");
+const alegra = require("./alegra");
+const collectionStore = require("./collection-store");
 
 const rootDir = path.resolve(__dirname, "..");
 const dataDir = path.join(__dirname, "data");
@@ -608,7 +610,10 @@ function applyAllowedBranchCollections(mergedState, nextState, collectionNames) 
 
 // Claves de primer nivel que nunca se copian tal cual del cliente: se derivan
 // del estado guardado o pasan por el merge por coleccion.
-const managedTopLevelKeys = new Set(["users", "branches", "auditLog", "stateRevision", "updatedAt"]);
+// `branding` solo se cambia por su propio endpoint (super usuario). Se marca
+// como gestionada para que un PUT de estado normal nunca la pise con una copia
+// vieja del cliente.
+const managedTopLevelKeys = new Set(["users", "branches", "auditLog", "stateRevision", "updatedAt", "branding"]);
 
 function applyExtraTopLevelKeys(mergedState, nextState) {
   Object.keys(nextState || {}).forEach((key) => {
@@ -790,16 +795,51 @@ function assertPersistableState(nextState) {
   return nextState;
 }
 
+// Colecciones que solo crecen y viven en su propia tabla, fuera del documento
+// de 2 MB. Ver backend/collection-store.js. Empezamos por los movimientos de
+// inventario, que solo se agregan (nunca se editan ni se borran), asi que la
+// migracion no puede perder datos.
+const overlayCollections = ["stockMovements"];
+
+// Rellena las colecciones de overlay antes de entregar el estado al cliente.
+async function hydrateForClient(state) {
+  for (const collection of overlayCollections) {
+    try {
+      await collectionStore.hydrate(state, collection);
+    } catch (error) {
+      console.error(`No se pudo rellenar ${collection} desde su tabla:`, error.message);
+    }
+  }
+  return state;
+}
+
+// Mueve las colecciones de overlay a su tabla y las quita del documento a
+// persistir. Si la tabla falla, la coleccion se queda en el documento
+// (comportamiento anterior): un fallo degrada sin perder nada.
+async function dehydrateForStorage(state) {
+  let doc = state;
+  for (const collection of overlayCollections) {
+    try {
+      await collectionStore.absorb(doc, collection);
+      doc = collectionStore.stripped(doc, collection);
+    } catch (error) {
+      console.error(`No se pudo mover ${collection} a su tabla, se queda en el documento:`, error.message);
+    }
+  }
+  return doc;
+}
+
 async function writeState(nextState) {
   assertPersistableState(nextState);
+  const doc = await dehydrateForStorage(nextState);
 
   if (!databaseUrl) {
-    await writeJsonState(nextState);
+    await writeJsonState(doc);
     return;
   }
 
   const pool = await getPostgresPool();
-  const storedState = applySystemUserAuth(nextState);
+  const storedState = applySystemUserAuth(doc);
   await pool.query(
     `INSERT INTO app_state (id, data, updated_at)
      VALUES ($1, $2, now())
@@ -819,12 +859,20 @@ async function writeStateIfRevision(nextState, expectedRevision) {
   if (!databaseUrl) {
     const current = await readJsonState();
     if (stateRevision(current) !== Number(expectedRevision)) return false;
-    await writeJsonState(nextState);
+    await writeState(nextState);
     return true;
   }
 
   const pool = await getPostgresPool();
-  const storedState = applySystemUserAuth(nextState);
+  // La revision se comprueba en el documento. Se hace primero para no absorber
+  // los movimientos si otra escritura gano la carrera.
+  const check = await pool.query(
+    "SELECT COALESCE((data ->> 'stateRevision')::numeric, 0) AS rev FROM app_state WHERE id = 1"
+  );
+  if (Number(check.rows[0]?.rev ?? -1) !== Number(expectedRevision)) return false;
+
+  const doc = await dehydrateForStorage(nextState);
+  const storedState = applySystemUserAuth(doc);
   const result = await pool.query(
     `UPDATE app_state
         SET data = $1, updated_at = now()
@@ -1098,6 +1146,11 @@ function referencedImageIds(state) {
 
   collect(state?.products);
   Object.values(state?.branches || {}).forEach((branch) => collect(branch?.products));
+
+  // El logotipo del negocio tambien vive en el almacen de imagenes. Sin esto,
+  // la recoleccion de huerfanas lo borraria una hora despues de subirlo, porque
+  // ningun producto lo referencia.
+  if (state?.branding?.logoId) ids.add(String(state.branding.logoId));
   return ids;
 }
 
@@ -1208,6 +1261,45 @@ function publicBranchLabel(branchId) {
 
 async function handlePublicBooking(req, res, url) {
   const pathname = url.pathname;
+
+  // Identidad del negocio: nombre y si hay logo propio. Sin sesion, porque lo
+  // consumen la pantalla de acceso y la pagina publica de reservas.
+  if (pathname === "/api/public/branding" && req.method === "GET") {
+    const state = await ensureState();
+    const branding = state.branding || {};
+    sendJson(req, res, 200, {
+      ok: true,
+      branding: {
+        name: String(branding.name || "Chic & Co"),
+        hasLogo: Boolean(branding.logoId),
+        logoVersion: String(branding.logoId || "")
+      }
+    });
+    return;
+  }
+
+  // Bytes del logotipo actual. Publico: un logo no es secreto, y lo necesitan
+  // surperficies que se muestran antes de iniciar sesion.
+  if (pathname === "/api/public/logo" && (req.method === "GET" || req.method === "HEAD")) {
+    const state = await ensureState();
+    const logoId = state.branding?.logoId;
+    const image = logoId ? await mediaStore.readImage(logoId) : null;
+    if (!image) {
+      sendError(req, res, 404, "Sin logotipo.");
+      return;
+    }
+    setBaseHeaders(req, res);
+    res.writeHead(200, {
+      "Content-Type": image.contentType,
+      "Content-Length": image.buffer.length,
+      "Cache-Control": "public, max-age=300",
+      "Content-Disposition": "inline",
+      "X-Content-Type-Options": "nosniff"
+    });
+    if (req.method === "HEAD") res.end();
+    else res.end(image.buffer);
+    return;
+  }
 
   if (pathname === "/api/public/config" && req.method === "GET") {
     const state = await ensureState();
@@ -1520,6 +1612,140 @@ async function handleBookingInbox(req, res, url, session, pathname) {
   sendJson(req, res, 200, { ok: true, request: { ...resolved, appointmentId: created.id }, appointment: created });
 }
 
+// Identidad del negocio (nombre + logotipo). Solo un super usuario la cambia.
+// El logo se guarda en el almacen de imagenes y su id vive en state.branding,
+// que es texto minusculo y se sincroniza como parte del estado.
+async function handleBrandingUpdate(req, res, session) {
+  const state = await ensureState();
+  const user = sessionUserFromState(state, session);
+  if (!isSuperUser(user)) {
+    sendError(req, res, 403, "Solo un super usuario puede cambiar la identidad del negocio.");
+    return;
+  }
+
+  const payload = await readJsonBody(req);
+  const name = String(payload.name || "").trim().slice(0, 80);
+  let newLogoId = "";
+
+  if (payload.dataUrl) {
+    try {
+      const saved = await mediaStore.saveImage({
+        dataUrl: payload.dataUrl,
+        kind: "branding",
+        ownerId: "branding",
+        userId: user.id
+      });
+      newLogoId = saved.id;
+    } catch (error) {
+      sendError(req, res, error.statusCode || 400, error.message || "No se pudo guardar el logotipo.");
+      return;
+    }
+  }
+
+  let previousLogoId = "";
+  await withStateLock(async () => {
+    const current = await ensureState();
+    const branding = { ...(current.branding || {}) };
+    previousLogoId = branding.logoId || "";
+    if (name) branding.name = name;
+    if (newLogoId) branding.logoId = newLogoId;
+    if (payload.removeLogo) delete branding.logoId;
+    branding.updatedAt = new Date().toISOString();
+
+    const nextState = { ...current, branding };
+    addAuditEntry(nextState, user, "branding.update", ["branding"]);
+    await writeState(stampRevision(nextState, current));
+  });
+
+  // Si se reemplazo o quito el logo, el anterior deja de estar referenciado.
+  if ((newLogoId || payload.removeLogo) && previousLogoId && previousLogoId !== newLogoId) {
+    mediaStore.deleteImage(previousLogoId).catch(() => {});
+  }
+
+  broadcastStateUpdated(session, ["branding"]);
+  const fresh = await ensureState();
+  sendJson(req, res, 200, { ok: true, branding: fresh.branding || {} });
+}
+
+// Envia una factura ya guardada a Alegra y anota el resultado en la propia
+// factura. La factura no cambia si el envio falla: solo se registra el intento.
+async function handleInvoiceToAlegra(req, res, session, invoiceId) {
+  const state = await ensureState();
+  const user = sessionUserFromState(state, session);
+  if (!canWriteModule(user, "facturacion") && !isFullAccessUser(user)) {
+    sendError(req, res, 403, "Este usuario no puede facturar.");
+    return;
+  }
+  if (!alegra.isConfigured()) {
+    sendError(req, res, 400, "Alegra no esta configurado. Defina ALEGRA_EMAIL y ALEGRA_TOKEN.");
+    return;
+  }
+
+  const payload = await readJsonBody(req);
+  const branchId = String(payload.branchId || state.currentBranchId || "");
+
+  // La factura y sus datos relacionados viven en la sucursal.
+  const findInBranch = (data) => (data?.invoices || []).find((invoice) => invoice.id === invoiceId);
+  let branch = state.branches?.[branchId];
+  let invoice = findInBranch(branch);
+  let resolvedBranchId = branchId;
+  if (!invoice) {
+    for (const [id, data] of Object.entries(state.branches || {})) {
+      const found = findInBranch(data);
+      if (found) {
+        invoice = found;
+        branch = data;
+        resolvedBranchId = id;
+        break;
+      }
+    }
+  }
+
+  if (!invoice) {
+    sendError(req, res, 404, "Factura no encontrada.");
+    return;
+  }
+  if (invoice.alegra?.status === "sent") {
+    sendJson(req, res, 200, { ok: true, alegra: invoice.alegra, alreadySent: true });
+    return;
+  }
+
+  const client = (branch.clients || []).find((item) => item.id === invoice.clientId) || {};
+  const procedure = (branch.procedures || []).find((item) => item.id === invoice.procedureId) || {};
+  const product = (branch.products || []).find((item) => item.id === invoice.productId) || {};
+
+  const result = await alegra.sendInvoice(invoice, {
+    clientName: client.name,
+    clientEmail: client.email,
+    clientPhone: client.phone,
+    clientIdentification: client.identification || client.cedula,
+    procedureName: procedure.name,
+    productName: product.name
+  });
+
+  const record = result.ok
+    ? { status: "sent", alegraId: result.alegraId, number: result.number, url: result.url, sentAt: new Date().toISOString() }
+    : { status: "error", reason: result.reason || "Fallo el envio", sentAt: new Date().toISOString() };
+
+  await withStateLock(async () => {
+    const current = await ensureState();
+    const nextState = cloneValue(current);
+    const targetBranch = nextState.branches?.[resolvedBranchId];
+    const applyTo = (list) => {
+      const item = (list || []).find((entry) => entry.id === invoiceId);
+      if (item) item.alegra = record;
+    };
+    applyTo(targetBranch?.invoices);
+    if (nextState.currentBranchId === resolvedBranchId) applyTo(nextState.invoices);
+    addAuditEntry(nextState, user, result.ok ? "alegra.sent" : "alegra.error", [`invoices:${invoiceId}`]);
+    await writeState(stampRevision(nextState, current));
+  });
+
+  broadcastStateUpdated(session, ["invoices"]);
+  if (result.ok) sendJson(req, res, 200, { ok: true, alegra: record });
+  else sendError(req, res, 502, record.reason);
+}
+
 async function handleApi(req, res, url) {
   const pathname = url.pathname;
   if (!isAllowedOrigin(req)) {
@@ -1597,6 +1823,28 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  if (pathname === "/api/branding" && req.method === "POST") {
+    await handleBrandingUpdate(req, res, session);
+    return;
+  }
+
+  if (pathname === "/api/integrations" && req.method === "GET") {
+    sendJson(req, res, 200, {
+      ok: true,
+      integrations: {
+        alegra: { configured: alegra.isConfigured() },
+        correo: { configured: mailer.isConfigured() }
+      }
+    });
+    return;
+  }
+
+  const alegraMatch = pathname.match(/^\/api\/invoices\/([\w-]{1,40})\/alegra$/);
+  if (alegraMatch && req.method === "POST") {
+    await handleInvoiceToAlegra(req, res, session, alegraMatch[1]);
+    return;
+  }
+
   if (pathname === "/api/reports/daily/preview" && req.method === "POST") {
     const state = await ensureState();
     const user = sessionUserFromState(state, session);
@@ -1638,7 +1886,7 @@ async function handleApi(req, res, url) {
   }
 
   if (pathname === "/api/state" && req.method === "GET") {
-    const state = await ensureState();
+    const state = await hydrateForClient(await ensureState());
     sendJson(req, res, 200, { ok: true, state: stripSensitiveState(state) });
     return;
   }
@@ -1650,6 +1898,8 @@ async function handleApi(req, res, url) {
       sendError(req, res, 403, "Solo un super usuario puede exportar respaldos.");
       return;
     }
+    // El respaldo debe incluir las colecciones de overlay, no solo el documento.
+    await hydrateForClient(state);
     sendJson(req, res, 200, { ok: true, backup: backupPayload(state) });
     return;
   }
@@ -1742,6 +1992,9 @@ async function handleApi(req, res, url) {
     }
 
     if (result.conflict) {
+      // El estado que se devuelve para fusionar debe traer las colecciones de
+      // overlay, o el cliente creeria que se vaciaron.
+      await hydrateForClient(result.currentState);
       sendJson(req, res, 409, {
         ok: false,
         code: "STATE_CONFLICT",
@@ -1880,7 +2133,9 @@ if (require.main === module) {
 // mismo servidor, asi que el arranque real puede venir de cualquiera de ellas.
 // El temporizador se enciende una sola vez, cuando el servidor empieza a oir.
 server.on("listening", () => {
-  dailyReport.startScheduler(ensureState, branchLabels);
+  // El estado para el reporte y el respaldo se entrega hidratado, para que la
+  // instantanea incluya las colecciones que viven en tablas de overlay.
+  dailyReport.startScheduler(async () => hydrateForClient(await ensureState()), branchLabels);
 });
 
 module.exports = {
