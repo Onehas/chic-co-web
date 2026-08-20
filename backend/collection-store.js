@@ -142,9 +142,15 @@ async function absorb(state, collection) {
     seen.set(branchId, bucket);
   };
 
+  // Se absorbe SOLO desde cada sucursal, nunca desde el espejo de nivel
+  // superior. Ese espejo es una copia de la sucursal activa, pero si un PUT
+  // llega con `currentBranchId` que no concuerda con el contenido del espejo
+  // -un bug del cliente en la ventana de cambio de sucursal-, atribuirlo a la
+  // sucursal activa escribia los movimientos de una sucursal en la tabla de la
+  // otra. Como el overlay nunca borra, esa contaminacion quedaba permanente.
+  // La sucursal siempre es la fuente correcta: el cliente vuelca el espejo a
+  // branches[currentBranchId] antes de sincronizar, asi que no se pierde nada.
   Object.entries(state.branches || {}).forEach(([branchId, data]) => collectFrom(branchId, data?.[collection]));
-  // El espejo de nivel superior pertenece a la sucursal activa.
-  if (state.currentBranchId) collectFrom(state.currentBranchId, state[collection]);
 
   let written = 0;
   const db = await pool(collection);

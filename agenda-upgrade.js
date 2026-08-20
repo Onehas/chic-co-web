@@ -283,6 +283,20 @@
       return `<div class="empty-state">Esta sucursal no tiene especialistas registrados.</div>${leftovers}`;
     }
 
+    // Linea de "ahora": solo cuando se mira el dia de hoy y la hora cae dentro
+    // del horario dibujado. Se coloca en la fila de su media hora y se empuja
+    // hacia abajo la fraccion exacta que falta, para que quede justo en la hora.
+    let nowLine = "";
+    if (selectedDay === todayISO()) {
+      const now = new Date();
+      const nowMinutes = now.getHours() * 60 + now.getMinutes();
+      if (nowMinutes >= dayStart && nowMinutes <= dayEnd) {
+        const nowRow = Math.floor((nowMinutes - dayStart) / slotStep);
+        const nowOffset = (((nowMinutes - dayStart) % slotStep) / slotStep) * 32;
+        nowLine = `<div class="agenda-now" aria-hidden="true" style="grid-column: 2 / -1; grid-row: ${nowRow + 2}; transform: translateY(${nowOffset}px);"><span class="agenda-now-dot"></span></div>`;
+      }
+    }
+
     return `
       <div class="agenda-grid-scroll">
         <div
@@ -294,9 +308,35 @@
           ${hours}
           ${freeCells}
           ${blocks.join("")}
+          ${nowLine}
         </div>
       </div>
       ${leftovers}
+    `;
+  }
+
+  // Pulso del dia: un vistazo a como viene la jornada por estado.
+  function renderDayPulse(selectedDay) {
+    const dayAppointments = appointmentsForDay(selectedDay);
+    const count = (status) => dayAppointments.filter((appointment) => appointment.status === status).length;
+    const chips = [
+      { label: "Confirmadas", value: count("Confirmada"), tone: "confirmada" },
+      { label: "Pendientes", value: count("Pendiente"), tone: "pendiente" },
+      { label: "En curso", value: count("En curso"), tone: "curso" },
+      { label: "Atendidas", value: count("Atendida"), tone: "atendida" }
+    ];
+    return `
+      <div class="agenda-pulse" role="group" aria-label="Resumen del dia">
+        ${chips
+          .map(
+            (chip) => `
+              <div class="agenda-pulse-chip is-${chip.tone}">
+                <span class="agenda-pulse-value">${chip.value}</span>
+                <span class="agenda-pulse-label">${escapeHtml(chip.label)}</span>
+              </div>`
+          )
+          .join("")}
+      </div>
     `;
   }
 
@@ -332,6 +372,8 @@
         </header>
 
         <div class="agenda-week">${renderWeekStrip(selectedDay)}</div>
+
+        ${renderDayPulse(selectedDay)}
 
         ${renderDayGrid(selectedDay, specialists)}
 
@@ -954,6 +996,69 @@
       font-size: 12px;
     }
 
+    /* Pulso del dia */
+    .agenda-pulse {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin: 14px 0 4px;
+    }
+    .agenda-pulse-chip {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      padding: 9px 12px;
+      border: 1px solid var(--line);
+      border-left: 3px solid var(--ink-3);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+    }
+    .agenda-pulse-chip.is-pendiente { border-left-color: var(--warn); }
+    .agenda-pulse-chip.is-confirmada { border-left-color: var(--accent); }
+    .agenda-pulse-chip.is-curso { border-left-color: var(--ok); }
+    .agenda-pulse-chip.is-atendida { border-left-color: var(--line-strong); }
+    .agenda-pulse-value {
+      font-size: 19px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      font-variant-numeric: tabular-nums;
+    }
+    .agenda-pulse-label {
+      font-size: 11.5px;
+      color: var(--ink-3);
+    }
+
+    /* Linea de la hora actual sobre la rejilla */
+    .agenda-now {
+      position: relative;
+      height: 0;
+      border-top: 2px solid var(--crit);
+      z-index: 3;
+      pointer-events: none;
+      align-self: start;
+    }
+    .agenda-now-dot {
+      position: absolute;
+      left: -5px;
+      top: -5px;
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--crit);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--crit) 25%, transparent);
+    }
+
+    /* Entrada escalonada de las citas al abrir el dia */
+    @media (prefers-reduced-motion: no-preference) {
+      .agenda-block {
+        animation: agendaBlockRise 320ms var(--ease-out) both;
+      }
+      @keyframes agendaBlockRise {
+        from { opacity: 0; transform: translateY(6px) scale(0.99); }
+        to { opacity: 1; transform: none; }
+      }
+    }
+
     @media (max-width: 720px) {
       .agenda-legend-hint {
         margin-left: 0;
@@ -961,6 +1066,10 @@
 
       .agenda-day-count {
         display: none;
+      }
+
+      .agenda-pulse {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
       }
     }
   `;

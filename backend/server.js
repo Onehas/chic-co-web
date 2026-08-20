@@ -10,6 +10,7 @@ const publicBooking = require("./public-booking");
 const mailer = require("./mailer");
 const dailyReport = require("./daily-report");
 const alegra = require("./alegra");
+const alegraConfigStore = require("./alegra-config-store");
 const collectionStore = require("./collection-store");
 
 const rootDir = path.resolve(__dirname, "..");
@@ -30,13 +31,13 @@ const loginAttempts = new Map();
 const realtimeClients = new Map();
 let realtimeRevision = 0;
 
-// Las contrasenas reales deben venir de variables de entorno del proveedor.
-// Los valores por defecto solo existen para no romper instalaciones anteriores
-// y deben rotarse: estan publicados en el historial del repositorio.
-const receptionPasswordHash =
-  process.env.CHIC_RECEPCION_PASSWORD_HASH || "5813f24ae4432b277c8c92a78bf035caaa8f5a9ad0031441f5eccd2d4c0e2fd0";
-const monicaPasswordHash =
-  process.env.CHIC_MONICA_PASSWORD_HASH || "e7d081ee45073bc0da9fd633a609db90be0adc2abac6ac47e79e375544e81c22";
+// Las contrasenas reales vienen de variables de entorno del proveedor. Ya no se
+// hornea ningun hash por defecto: los que habia eran sha256 sin sal y estaban
+// publicados en el historial del repositorio, asi que cualquiera con acceso de
+// lectura podia romperlos offline. Sin la variable, la cuenta arranca sin hash y
+// no puede entrar hasta que un super usuario le fije la contrasena desde la app.
+const receptionPasswordHash = process.env.CHIC_RECEPCION_PASSWORD_HASH || "";
+const monicaPasswordHash = process.env.CHIC_MONICA_PASSWORD_HASH || "";
 const bootstrapEmail = String(process.env.CHIC_BOOTSTRAP_EMAIL || "").trim().toLowerCase();
 const bootstrapPassword = String(process.env.CHIC_BOOTSTRAP_PASSWORD || "");
 
@@ -52,11 +53,10 @@ const systemUserAuth = {
     function: "Super usuario",
     permissions: superUserPermissions
   },
-  "USR-001": {
-    role: "super",
-    function: "Super usuario",
-    permissions: superUserPermissions
-  },
+  // USR-001 ya NO se fija como super. Antes quedaba como un segundo super
+  // permanente e imposible de degradar desde la app; si alguien le ponia correo
+  // y contrasena, tenia acceso total. Se deja fuera de las cuentas de sistema
+  // para que sea una cuenta normal, editable como cualquier otra.
   "USR-002": {
     name: "Recepcion",
     email: "recepcion@chicnco.cr",
@@ -98,13 +98,13 @@ const moduleWriteCollections = {
   clientes: ["clients"],
   inventario: ["products", "stockMovements", "locations"],
   procedimientos: ["procedures"],
-  enCurso: ["activeProcedures", "products", "stockMovements"],
+  enCurso: ["activeProcedures", "products", "stockMovements", "stations"],
   planes: ["plans", "activeProcedures", "appointments"],
   citas: ["appointments", "activeProcedures"],
   facturacion: ["invoices", "products", "stockMovements"],
   usuarios: ["users"]
 };
-const branchDataCollections = ["clients", "products", "procedures", "activeProcedures", "plans", "appointments", "invoices", "stockMovements", "locations"];
+const branchDataCollections = ["clients", "products", "procedures", "activeProcedures", "plans", "appointments", "invoices", "stockMovements", "locations", "stations"];
 const auditLogLimit = 300;
 
 const mimeTypes = {
@@ -527,6 +527,13 @@ function mergeStockOnlyProducts(nextProducts, currentProducts) {
     if (!incoming) return product;
     const stock = Number(incoming.stock);
     if (!Number.isFinite(stock) || stock < 0) return product;
+    // Estos modulos (facturacion, en-curso) solo DESCUENTAN stock al vender o
+    // consumir producto. Nunca lo suben: subir existencias es administrar
+    // inventario, y eso queda para quien tiene ese permiso. Por eso un valor
+    // mayor al actual se ignora: evita que un usuario de facturacion infle las
+    // existencias, con intencion o por un bug del cliente.
+    const currentStock = Number(product.stock);
+    if (Number.isFinite(currentStock) && stock > currentStock) return product;
     return { ...product, stock };
   });
 }
@@ -1746,6 +1753,47 @@ async function handleInvoiceToAlegra(req, res, session, invoiceId) {
   else sendError(req, res, 502, record.reason);
 }
 
+// Configuracion de Alegra desde la app. Solo un administrador la ve o cambia.
+// El token nunca sale en claro: la vista publica solo dice si existe y una
+// pista. Al guardar se persiste fuera del estado y se reconfigura el adaptador
+// en caliente, sin redeployar.
+async function handleAlegraConfig(req, res, session) {
+  const state = await ensureState();
+  const user = sessionUserFromState(state, session);
+  if (!isFullAccessUser(user)) {
+    sendError(req, res, 403, "Solo un administrador puede ver o cambiar la conexion con Alegra.");
+    return;
+  }
+
+  if (req.method === "GET") {
+    sendJson(req, res, 200, { ok: true, config: alegra.currentConfig() });
+    return;
+  }
+
+  const payload = await readJsonBody(req);
+  const stored = await alegraConfigStore.save({
+    email: payload.email,
+    token: payload.token,
+    taxId: payload.taxId,
+    endpoint: payload.endpoint,
+    clearToken: Boolean(payload.clearToken)
+  });
+  alegra.configure({ ...stored, clearToken: Boolean(payload.clearToken) });
+  sendJson(req, res, 200, { ok: true, config: alegra.currentConfig() });
+}
+
+// Prueba la conexion con las credenciales vigentes sin emitir ninguna factura.
+async function handleAlegraTest(req, res, session) {
+  const state = await ensureState();
+  const user = sessionUserFromState(state, session);
+  if (!isFullAccessUser(user)) {
+    sendError(req, res, 403, "Solo un administrador puede probar la conexion con Alegra.");
+    return;
+  }
+  const result = await alegra.testConnection();
+  sendJson(req, res, result.ok ? 200 : 400, { ok: result.ok, result });
+}
+
 async function handleApi(req, res, url) {
   const pathname = url.pathname;
   if (!isAllowedOrigin(req)) {
@@ -1836,6 +1884,16 @@ async function handleApi(req, res, url) {
         correo: { configured: mailer.isConfigured() }
       }
     });
+    return;
+  }
+
+  if (pathname === "/api/alegra/config" && (req.method === "GET" || req.method === "PUT")) {
+    await handleAlegraConfig(req, res, session);
+    return;
+  }
+
+  if (pathname === "/api/alegra/test" && req.method === "POST") {
+    await handleAlegraTest(req, res, session);
     return;
   }
 
@@ -2129,10 +2187,21 @@ if (require.main === module) {
   });
 }
 
-// Las capas fiscales vuelven a registrar el manejador de peticiones sobre este
-// mismo servidor, asi que el arranque real puede venir de cualquiera de ellas.
+// La configuracion de Alegra guardada en la app manda sobre las variables de
+// entorno: se carga al arrancar para que el envio use las credenciales que el
+// negocio conecto desde la interfaz.
+async function loadStoredAlegraConfig() {
+  try {
+    const stored = await alegraConfigStore.load();
+    if (stored) alegra.configure(stored);
+  } catch (error) {
+    console.error("No se pudo cargar la configuracion de Alegra:", error.message);
+  }
+}
+
 // El temporizador se enciende una sola vez, cuando el servidor empieza a oir.
 server.on("listening", () => {
+  loadStoredAlegraConfig();
   // El estado para el reporte y el respaldo se entrega hidratado, para que la
   // instantanea incluya las colecciones que viven en tablas de overlay.
   dailyReport.startScheduler(async () => hydrateForClient(await ensureState()), branchLabels);
@@ -2147,8 +2216,8 @@ module.exports = {
   preserveProtectedState,
   stripSensitiveState,
   applySystemUserAuth,
-  // Reutilizados por las capas de Hacienda para no autenticarse por HTTP
-  // contra su propio proceso.
+  // Expuestos para las pruebas y para cualquier capa que quiera leer el estado
+  // sin autenticarse por HTTP contra su propio proceso.
   ensureState,
   readState,
   sessionFromRequest,

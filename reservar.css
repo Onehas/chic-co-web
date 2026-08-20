@@ -398,6 +398,10 @@ button {
 
 .services {
   display: grid;
+  /* Columna explicita atada al ancho del contenedor. Sin esto, la unica
+     columna implicita se dimensionaba a max-content y el nombre de servicio
+     mas largo la empujaba mas ancha que la pantalla en moviles angostos. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
 }
 
@@ -406,6 +410,7 @@ button {
   align-items: center;
   gap: 12px;
   width: 100%;
+  min-width: 0;
   padding: 13px 14px;
   color: inherit;
   text-align: left;

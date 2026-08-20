@@ -31,9 +31,6 @@ services:
         sync: false
       - key: CHIC_MONICA_PASSWORD_HASH
         sync: false
-      # Cifra los secretos fiscales (.p12, PIN, contrasena ATV). Minimo 24 caracteres.
-      - key: HACIENDA_SECRET_KEY
-        sync: false
       # Cuantos proxys propios hay delante. En Render es 1. Sin ella, el limite
       # de intentos de login cuenta por cuenta en vez de por visitante.
       - key: TRUST_PROXY_HOPS

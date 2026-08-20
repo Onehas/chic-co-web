@@ -76,6 +76,32 @@ const mov1 = afterEdit.branches.rohrmoser.stockMovements.find((m) => m.id === "M
 assert.equal(mov1.quantity, 99, "actualiza el movimiento existente por id");
 assert.equal(afterEdit.branches.rohrmoser.stockMovements.length, 3, "sin duplicarlo");
 
+/* --- No contamina entre sucursales ----------------------------------- */
+
+// El espejo de nivel superior podria venir desincronizado de currentBranchId
+// (un bug del cliente en la ventana de cambio de sucursal). La absorcion no
+// debe usar ese espejo para atribuir sucursal: solo cuenta lo que hay bajo
+// cada branches[b]. Aqui el espejo trae movimientos de rohrmoser pero
+// currentBranchId dice "alajuela"; alajuela NO debe recibirlos.
+const crossState = baseState();
+crossState.currentBranchId = "alajuela";
+crossState.branches.rohrmoser.stockMovements = [{ id: "RH-1", date: "2026-08-25" }];
+crossState.branches.alajuela.stockMovements = [];
+crossState.stockMovements = [{ id: "RH-1", date: "2026-08-25" }]; // espejo mal atribuido
+await overlay.absorb(crossState, "stockMovements");
+
+const afterCross = baseState();
+await overlay.hydrate(afterCross, "stockMovements");
+assert.ok(
+  afterCross.branches.rohrmoser.stockMovements.some((m) => m.id === "RH-1"),
+  "el movimiento queda en su sucursal real"
+);
+assert.equal(
+  afterCross.branches.alajuela.stockMovements.filter((m) => m.id === "RH-1").length,
+  0,
+  "y NO se filtra a la otra sucursal"
+);
+
 /* --- Respaldo automatico --------------------------------------------- */
 
 assert.equal(await backup.count(), 0, "arranca sin respaldos");
