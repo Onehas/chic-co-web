@@ -49,3 +49,9 @@ services:
       # Protege la ruta que dispara el reporte de cierre desde un Cron Job.
       - key: CHIC_REPORT_SECRET
         sync: false
+      # Facturacion electronica con Alegra. Sin estas dos, el envio a Alegra
+      # queda apagado y el resto del sistema funciona igual.
+      - key: ALEGRA_EMAIL
+        sync: false
+      - key: ALEGRA_TOKEN
+        sync: false

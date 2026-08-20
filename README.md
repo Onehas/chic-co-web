@@ -62,10 +62,53 @@ La version online guarda los datos en Postgres y valida el login desde la API. E
 | `CHIC_MIN_LEAD_MINUTES` | Antelacion minima para reservar en linea. Por defecto 120. |
 | `CHIC_MAX_HORIZON_DAYS` | Hasta cuando se puede reservar. Por defecto 60. |
 | `TRUST_PROXY_HOPS` | Cuantos proxys propios hay delante. En Render, `1`. Sin ella se usa la conexion real y el limite de intentos de login cuenta por cuenta en vez de por visitante. |
+| `ALEGRA_EMAIL` | Correo de la cuenta de Alegra (facturacion electronica). Sin el, el envio a Alegra queda apagado. |
+| `ALEGRA_TOKEN` | Token de API de Alegra (Configuracion -> API). |
+| `ALEGRA_TAX_ID` | Opcional. Id del impuesto IVA 13% en esa cuenta de Alegra. |
+| `CHIC_BACKUP_KEEP` | Cuantas instantaneas de respaldo se conservan. Por defecto 30. |
 | `CHIC_MAX_IMAGES` | Tope de fotos de producto guardadas. Por defecto 4000. |
 | `HOST`, `PORT` | Segun lo indique el proveedor. En Render, `HOST=0.0.0.0`. |
 
 En una instalacion nueva, define `CHIC_BOOTSTRAP_EMAIL` y `CHIC_BOOTSTRAP_PASSWORD` antes del primer arranque. Sin ellas el estado inicial se crea igual, pero sin ninguna cuenta capaz de entrar.
+
+## Identidad del negocio
+
+El nombre y el logotipo son editables desde el sistema: un super usuario abre
+**Personalizacion** en el menu de su cuenta, sube el logo y escribe el nombre.
+Se aplican en la pantalla de acceso, la barra lateral, la barra superior y la
+pagina publica de reservas. El logo vive en el almacen de imagenes; su id y el
+nombre en `state.branding`.
+
+## Cuentas y cambio de usuario
+
+Cada persona entra con su propia cuenta. En una computadora compartida se puede
+cambiar de usuario desde el menu, pero **cambiar a otra cuenta pide su
+contrasena** y hace un inicio de sesion real nuevo: nadie puede actuar como otra
+persona sin su clave, y el servidor registra siempre al autor correcto porque
+decide todo por el token, no por lo que diga el navegador. El token anterior se
+revoca al cambiar.
+
+## Facturacion con Alegra
+
+`backend/alegra.js` traduce cada factura al formato de Alegra y la envia cuando
+se definen `ALEGRA_EMAIL` y `ALEGRA_TOKEN`. En el modulo de Facturacion, cada
+factura tiene un boton **Enviar a Alegra** y muestra el numero de la factura
+electronica con enlace al PDF. Un fallo de Alegra no altera la factura: solo se
+registra el intento para reintentarlo.
+
+## Persistencia y respaldo
+
+El estado principal vive en un documento JSON (`app_state`) con tope de 2 MB por
+guardado. Para que las colecciones que solo crecen no llenen ese documento, se
+migran a tablas propias (overlay), de forma transparente para el navegador:
+`backend/collection-store.js`. La primera migrada es la de movimientos de
+inventario (`stockMovements`), que solo se agrega y nunca se edita ni se borra,
+asi que la migracion no puede perder datos. Las facturas son el siguiente paso
+(necesitan una accion de anular en vez de borrado crudo).
+
+Ademas, cada dia se guarda una instantanea completa del estado en Postgres
+(`state_backups`), conservando las ultimas 30 (`CHIC_BACKUP_KEEP`). Aun si el
+documento principal se dañara, siempre hay de donde recuperar el dia anterior.
 
 ## Agenda publica
 

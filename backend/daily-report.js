@@ -16,6 +16,7 @@
 
 const mailer = require("./mailer");
 const bookingStore = require("./booking-store");
+const backupStore = require("./backup-store");
 
 // Costa Rica es UTC-6 todo el ano.
 const timezoneOffsetMinutes = Number(process.env.CHIC_UTC_OFFSET_MINUTES || -360);
@@ -146,17 +147,34 @@ async function sendReportFor(state, dateISO, branchLabels, { force = false } = {
 
 // Comprueba cada quince minutos si ya paso la hora del reporte. Un intervalo
 // corto seria un desperdicio y uno largo se saltaria la ventana.
+let lastBackupDate = "";
+
 function startScheduler(getState, branchLabels) {
   if (timer) return timer;
 
   timer = setInterval(async () => {
     try {
       const { date, hour } = localParts();
-      if (hour < reportHour || lastSentDate === date) return;
+      if (hour < reportHour) return;
+
       const state = await getState();
-      await sendReportFor(state, date, branchLabels);
+
+      // El respaldo diario corre aunque no haya correo configurado: es la red
+      // de seguridad contra la perdida total, independiente del reporte.
+      if (lastBackupDate !== date) {
+        try {
+          await backupStore.snapshot(state, `cierre ${date}`);
+          lastBackupDate = date;
+        } catch (error) {
+          console.error("No se pudo crear el respaldo diario:", error.message);
+        }
+      }
+
+      if (lastSentDate !== date) {
+        await sendReportFor(state, date, branchLabels);
+      }
     } catch (error) {
-      console.error("No se pudo enviar el reporte de fin de dia:", error.message);
+      console.error("No se pudo completar la tarea de fin de dia:", error.message);
     }
   }, 15 * 60 * 1000);
 

@@ -367,7 +367,28 @@
 
   /* --- Arranque -------------------------------------------------------- */
 
+  // Identidad del negocio: logo y nombre configurados desde el sistema.
+  async function loadBranding() {
+    try {
+      const response = await fetch("/api/public/branding", { cache: "no-store" });
+      if (!response.ok) return;
+      const { branding } = await response.json();
+      if (!branding) return;
+      const name = document.getElementById("brandName");
+      const logo = document.getElementById("brandLogo");
+      if (name && branding.name) name.textContent = branding.name;
+      if (logo && branding.hasLogo) {
+        logo.src = `/api/public/logo?v=${encodeURIComponent(branding.logoVersion || "")}`;
+        logo.alt = branding.name || "Logo";
+      }
+      if (branding.name) document.title = `Reservar cita · ${branding.name}`;
+    } catch (error) {
+      /* se queda con el logo por defecto */
+    }
+  }
+
   (async () => {
+    loadBranding();
     try {
       const result = await api("/api/public/config");
       config = result.config;
