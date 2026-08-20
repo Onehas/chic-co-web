@@ -1893,6 +1893,17 @@ function moveFormToDrawer() {
   if (!drawerElements.body) return;
   const panel = elements.viewContent?.querySelector(".view-grid > .form-panel");
   if (!panel) return;
+
+  // Si el panel esta abierto, alguien lo esta llenando. Un render disparado
+  // por la sincronizacion -otra persona guardo algo- no debe borrarle lo
+  // escrito. Se descarta el formulario recien generado para no dejar dos
+  // copias en el documento: los modulos que buscan form[data-form="..."] con
+  // querySelector se quedarian con la copia oculta.
+  if (document.body.classList.contains("drawer-open")) {
+    panel.remove();
+    return;
+  }
+
   drawerElements.body.replaceChildren(panel);
   if (drawerElements.title) {
     drawerElements.title.textContent = panel.dataset.formTitle || "Nuevo registro";
@@ -1911,7 +1922,11 @@ function openDrawer() {
   document.body.classList.add("drawer-open");
   drawerElements.root.setAttribute("aria-hidden", "false");
   window.setTimeout(() => {
-    drawerElements.body?.querySelector("input, select, textarea")?.focus();
+    // Solo controles realmente enfocables: el campo de foto trae un input de
+    // archivo oculto y otro de tipo hidden, y enfocarlos no hace nada.
+    drawerElements.body
+      ?.querySelector("input:not([type=hidden]):not([hidden]), select, textarea")
+      ?.focus();
   }, 220);
 }
 

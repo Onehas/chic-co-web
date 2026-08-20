@@ -21,6 +21,17 @@ const databaseUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL || "";
 // que en la práctica llegan entre 60 y 200 KB.
 const maxImageBytes = 900 * 1024;
 
+// Una foto recién subida todavía no está referenciada por ningún producto: el
+// navegador primero la sube y solo después guarda el estado con su id. Sin este
+// periodo de gracia, cualquier guardado que tocara productos —facturar
+// descuenta stock— borraba la foto que otra persona estaba subiendo en ese
+// mismo momento.
+const orphanGraceMs = 60 * 60 * 1000;
+
+// Tope de fotos guardadas. El disco de Render es de 1 GB y no hay ninguna otra
+// barrera que impida llenarlo subiendo imágenes en bucle.
+const maxStoredImages = Number(process.env.CHIC_MAX_IMAGES || 4000);
+
 let pgPool = null;
 let pgReady = false;
 
@@ -171,6 +182,10 @@ async function saveImage({ dataUrl, branchId = "", kind = "product", ownerId = "
 
   const db = await pool();
   if (db) {
+    const stored = await db.query("SELECT count(*)::int AS total FROM media_objects");
+    if (Number(stored.rows[0]?.total || 0) >= maxStoredImages) {
+      throw httpError("Se alcanzó el máximo de fotos guardadas. Elimine algunas antes de subir más.", 507);
+    }
     await db.query(
       `INSERT INTO media_objects (id, branch_id, kind, owner_id, content_type, byte_size, checksum, data, created_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
@@ -180,9 +195,12 @@ async function saveImage({ dataUrl, branchId = "", kind = "product", ownerId = "
   }
 
   await fs.mkdir(mediaDir, { recursive: true });
-  await fs.writeFile(path.join(mediaDir, `${id}.${extension}`), buffer);
   await withIndexLock(async () => {
     const index = await readIndex();
+    if (Object.keys(index).length >= maxStoredImages) {
+      throw httpError("Se alcanzó el máximo de fotos guardadas. Elimine algunas antes de subir más.", 507);
+    }
+    await fs.writeFile(path.join(mediaDir, `${id}.${extension}`), buffer);
     index[id] = { ...meta, extension };
     await writeIndex(index);
   });
@@ -240,12 +258,16 @@ async function deleteImage(rawId) {
 // Borra las imágenes que ya no referencia ningún producto. Se llama tras
 // guardar el estado: si alguien elimina un producto con foto, el archivo no
 // debe quedarse ocupando espacio para siempre.
-async function collectOrphans(referencedIds) {
+async function collectOrphans(referencedIds, { graceMs = orphanGraceMs } = {}) {
   const keep = new Set(Array.from(referencedIds || []).filter(Boolean));
+  const cutoff = Date.now() - Math.max(0, Number(graceMs) || 0);
 
   const db = await pool();
   if (db) {
-    const result = await db.query("SELECT id FROM media_objects");
+    const result = await db.query(
+      "SELECT id FROM media_objects WHERE created_at < to_timestamp($1 / 1000.0)",
+      [cutoff]
+    );
     const orphans = result.rows.map((row) => row.id).filter((id) => !keep.has(id));
     if (!orphans.length) return 0;
     await db.query("DELETE FROM media_objects WHERE id = ANY($1::text[])", [orphans]);
@@ -254,7 +276,11 @@ async function collectOrphans(referencedIds) {
 
   return withIndexLock(async () => {
     const index = await readIndex();
-    const orphans = Object.keys(index).filter((id) => !keep.has(id));
+    const orphans = Object.keys(index).filter((id) => {
+      if (keep.has(id)) return false;
+      const createdAt = Date.parse(index[id]?.createdAt || "");
+      return !Number.isFinite(createdAt) || createdAt < cutoff;
+    });
     if (!orphans.length) return 0;
     for (const id of orphans) {
       const meta = index[id];
@@ -272,6 +298,8 @@ async function collectOrphans(referencedIds) {
 
 module.exports = {
   maxImageBytes,
+  maxStoredImages,
+  orphanGraceMs,
   decodeImage,
   detectImage,
   saveImage,

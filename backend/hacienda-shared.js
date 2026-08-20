@@ -25,8 +25,11 @@ function httpError(message, statusCode) {
  * Autenticacion
  * ---------------------------------------------------------------------- */
 
-async function requireSession(req, url) {
-  const session = (await core.sessionFromRequest(req)) || (url ? await core.sessionFromQuery(url) : null);
+// Ninguna ruta fiscal se consume desde un `src` de imagen, asi que el token
+// siempre viaja en la cabecera Authorization. Aceptarlo por query lo dejaria
+// escrito en los registros del proxy y en el historial del navegador.
+async function requireSession(req) {
+  const session = await core.sessionFromRequest(req);
   if (!session) throw httpError("Sesion requerida.", 401);
   return session;
 }

@@ -16,6 +16,7 @@ const maxBodyBytes = 2 * 1024 * 1024;
 const sessionTtlMs = 8 * 60 * 60 * 1000;
 const loginWindowMs = 15 * 60 * 1000;
 const maxLoginAttempts = 8;
+const maxAccountLoginAttempts = 20;
 let pgPool = null;
 let pgReady = false;
 const sessions = new Map();
@@ -179,6 +180,23 @@ function hashPasswordModern(password, salt = crypto.randomBytes(16).toString("he
   return `scrypt$${salt}$${derived}`;
 }
 
+// scrypt es deliberadamente costoso. Hecho de forma sincrona bloquea el unico
+// hilo de Node durante toda la derivacion, asi que unos pocos intentos de login
+// simultaneos dejan la aplicacion entera -incluidas las rutas fiscales- sin
+// responder. En las rutas HTTP siempre se usa la variante asincrona.
+function scryptAsync(password, salt) {
+  return new Promise((resolve, reject) => {
+    crypto.scrypt(String(password), salt, scryptKeyLength, scryptOptions, (error, derived) => {
+      if (error) reject(error);
+      else resolve(derived.toString("hex"));
+    });
+  });
+}
+
+async function hashPasswordModernAsync(password, salt = crypto.randomBytes(16).toString("hex")) {
+  return `scrypt$${salt}$${await scryptAsync(password, salt)}`;
+}
+
 function verifyPassword(password, storedHash) {
   const stored = String(storedHash || "");
   if (!stored) return false;
@@ -198,6 +216,25 @@ function verifyPassword(password, storedHash) {
   return timingSafeEqualText(stored, hashPassword(password));
 }
 
+async function verifyPasswordAsync(password, storedHash) {
+  const stored = String(storedHash || "");
+  if (!stored) return false;
+
+  if (isModernHash(stored)) {
+    const [, salt, digest] = stored.split("$");
+    if (!salt || !digest) return false;
+    let derived;
+    try {
+      derived = await scryptAsync(password, salt);
+    } catch (error) {
+      return false;
+    }
+    return timingSafeEqualText(derived, digest);
+  }
+
+  return timingSafeEqualText(stored, hashPassword(password));
+}
+
 function timingSafeEqualText(left, right) {
   const leftBuffer = Buffer.from(String(left || ""), "utf8");
   const rightBuffer = Buffer.from(String(right || ""), "utf8");
@@ -205,38 +242,69 @@ function timingSafeEqualText(left, right) {
   return crypto.timingSafeEqual(leftBuffer, rightBuffer);
 }
 
+// `X-Forwarded-For` lo escribe el cliente y el proxy solo le anade su valor al
+// final, asi que el primer elemento es dato del atacante: tomarlo permitia
+// rotar la IP en cada intento y saltarse el limite de intentos por completo.
+// Solo se confia en los ultimos `trustedProxyHops` saltos, que son los proxys
+// propios. Con 0 (por defecto) se usa la conexion real.
+const trustedProxyHops = Math.max(0, Number(process.env.TRUST_PROXY_HOPS || 0) || 0);
+
 function clientIp(req) {
-  return String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "unknown").split(",")[0].trim();
+  const socketIp = String(req.socket?.remoteAddress || "unknown");
+  if (!trustedProxyHops) return socketIp;
+
+  const forwarded = String(req.headers["x-forwarded-for"] || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (!forwarded.length) return socketIp;
+
+  const index = forwarded.length - trustedProxyHops;
+  return forwarded[index >= 0 ? index : 0];
 }
 
-function loginAttemptKey(req, email) {
-  return `${clientIp(req)}:${String(email || "").trim().toLowerCase()}`;
+function normalizedEmail(email) {
+  return String(email || "").trim().toLowerCase();
+}
+
+// Dos contadores independientes. El de IP+email frena a un atacante concreto;
+// el de solo email frena la fuerza bruta distribuida contra una cuenta, que es
+// justo lo que el contador por IP no puede ver.
+function loginAttemptKeys(req, email) {
+  const account = normalizedEmail(email);
+  return [`${clientIp(req)}:${account}`, `account:${account}`];
+}
+
+function limitFor(key) {
+  return key.startsWith("account:") ? maxAccountLoginAttempts : maxLoginAttempts;
 }
 
 function isLoginRateLimited(req, email) {
-  const key = loginAttemptKey(req, email);
   const now = Date.now();
-  const entry = loginAttempts.get(key);
-  if (!entry || now > entry.resetAt) {
-    loginAttempts.set(key, { count: 0, resetAt: now + loginWindowMs });
-    return false;
-  }
-  return entry.count >= maxLoginAttempts;
+  return loginAttemptKeys(req, email).some((key) => {
+    const entry = loginAttempts.get(key);
+    if (!entry || now > entry.resetAt) {
+      loginAttempts.set(key, { count: 0, resetAt: now + loginWindowMs });
+      return false;
+    }
+    return entry.count >= limitFor(key);
+  });
 }
 
 function recordFailedLogin(req, email) {
-  const key = loginAttemptKey(req, email);
   const now = Date.now();
-  const entry = loginAttempts.get(key);
-  if (!entry || now > entry.resetAt) {
-    loginAttempts.set(key, { count: 1, resetAt: now + loginWindowMs });
-    return;
-  }
-  entry.count += 1;
+  loginAttemptKeys(req, email).forEach((key) => {
+    const entry = loginAttempts.get(key);
+    if (!entry || now > entry.resetAt) {
+      loginAttempts.set(key, { count: 1, resetAt: now + loginWindowMs });
+      return;
+    }
+    entry.count += 1;
+  });
 }
 
 function clearFailedLogins(req, email) {
-  loginAttempts.delete(loginAttemptKey(req, email));
+  loginAttemptKeys(req, email).forEach((key) => loginAttempts.delete(key));
 }
 
 // Las sesiones se guardan en Postgres cuando hay base de datos: el plan
@@ -438,6 +506,38 @@ function writableCollectionsForUser(user) {
   return collections;
 }
 
+// Facturar y consumir producto descuentan stock, por eso los modulos de
+// facturacion y en-curso necesitan tocar `products`. Pero solo para eso: quien
+// no administra inventario no puede crear, borrar ni reeditar productos. Sin
+// esta restriccion, cualquiera que pueda facturar podia reescribir el catalogo
+// entero -precios incluidos- aunque la interfaz le oculte el modulo.
+function mergeStockOnlyProducts(nextProducts, currentProducts) {
+  if (!Array.isArray(currentProducts)) return currentProducts;
+  if (!Array.isArray(nextProducts)) return currentProducts;
+
+  const incomingById = new Map(nextProducts.filter((item) => item?.id).map((item) => [item.id, item]));
+  return currentProducts.map((product) => {
+    const incoming = incomingById.get(product.id);
+    if (!incoming) return product;
+    const stock = Number(incoming.stock);
+    if (!Number.isFinite(stock) || stock < 0) return product;
+    return { ...product, stock };
+  });
+}
+
+function restrictProductChanges(mergedState, currentState) {
+  mergedState.products = mergeStockOnlyProducts(mergedState.products, currentState?.products);
+
+  Object.keys(mergedState.branches || {}).forEach((branchId) => {
+    const currentBranch = currentState?.branches?.[branchId];
+    if (!currentBranch) return;
+    mergedState.branches[branchId].products = mergeStockOnlyProducts(
+      mergedState.branches[branchId]?.products,
+      currentBranch.products
+    );
+  });
+}
+
 function collectionChanged(nextState, currentState, collectionName) {
   return JSON.stringify(nextState?.[collectionName] || []) !== JSON.stringify(currentState?.[collectionName] || []);
 }
@@ -502,6 +602,25 @@ function applyAllowedBranchCollections(mergedState, nextState, collectionNames) 
   });
 }
 
+// Claves de primer nivel que nunca se copian tal cual del cliente: se derivan
+// del estado guardado o pasan por el merge por coleccion.
+const managedTopLevelKeys = new Set(["users", "branches", "auditLog", "stateRevision", "updatedAt"]);
+
+function applyExtraTopLevelKeys(mergedState, nextState) {
+  Object.keys(nextState || {}).forEach((key) => {
+    if (managedTopLevelKeys.has(key)) return;
+    if (branchDataCollections.includes(key)) return;
+    if (nextState[key] === undefined) return;
+    mergedState[key] = cloneValue(nextState[key]);
+  });
+}
+
+// Toda escritura -tambien la de un super usuario- se fusiona coleccion por
+// coleccion sobre el estado guardado. Antes, la rama de acceso total escribia
+// el documento del cliente tal cual: un PUT parcial (un cliente desactualizado,
+// una respuesta truncada, un bug del navegador) persistia un estado sin
+// `users` ni `branches` y dejaba la instancia inaccesible para siempre, porque
+// `ensureState` ya no vuelve a sembrar cuando el estado existe.
 function applyWritePolicy(nextState, currentState, session) {
   const user = sessionUserFromState(currentState, session);
   if (!user?.active) {
@@ -510,24 +629,33 @@ function applyWritePolicy(nextState, currentState, session) {
     throw error;
   }
 
+  const fullAccess = isFullAccessUser(user);
   const safeNextState = preserveProtectedState(nextState, currentState);
-  if (isFullAccessUser(user)) {
-    const unrestrictedState = preserveProtectedState(safeNextState, currentState);
-    addAuditEntry(unrestrictedState, user, "state.write", changedCollections(unrestrictedState, currentState));
-    return unrestrictedState;
-  }
-
   const writableCollections = writableCollectionsForUser(user);
   const mergedState = cloneValue(currentState) || {};
-  mergedState.currentUserId = session.userId;
-  if (typeof nextState.currentBranchId === "string") {
-    mergedState.currentBranchId = nextState.currentBranchId;
+
+  if (fullAccess) {
+    applyExtraTopLevelKeys(mergedState, safeNextState);
+  } else {
+    mergedState.currentUserId = session.userId;
+    if (typeof nextState.currentBranchId === "string") {
+      mergedState.currentBranchId = nextState.currentBranchId;
+    }
   }
 
   applyAllowedCollections(mergedState, safeNextState, writableCollections);
   applyAllowedBranchCollections(mergedState, safeNextState, writableCollections);
 
-  addAuditEntry(mergedState, user, "state.write.limited", changedCollections(mergedState, currentState));
+  if (!canWriteModule(user, "inventario")) {
+    restrictProductChanges(mergedState, currentState);
+  }
+
+  addAuditEntry(
+    mergedState,
+    user,
+    fullAccess ? "state.write" : "state.write.limited",
+    changedCollections(mergedState, currentState)
+  );
   return preserveProtectedState(mergedState, currentState);
 }
 
@@ -640,7 +768,27 @@ async function readState() {
   return applySystemUserAuth(result.rows[0]?.data || null);
 }
 
+// Ultima red de seguridad antes de tocar el disco o la base. Un estado sin
+// usuarios no se puede recuperar desde la propia aplicacion: nadie podria
+// iniciar sesion y `ensureState` no vuelve a sembrar porque la fila existe.
+function assertPersistableState(nextState) {
+  const invalid = (message) => Object.assign(new Error(message), { statusCode: 400 });
+
+  if (!nextState || typeof nextState !== "object" || Array.isArray(nextState)) {
+    throw invalid("Estado invalido: no es un objeto.");
+  }
+  if (!Array.isArray(nextState.users) || !nextState.users.length) {
+    throw invalid("Estado invalido: no se puede guardar sin usuarios.");
+  }
+  if (!nextState.branches || typeof nextState.branches !== "object" || Array.isArray(nextState.branches)) {
+    throw invalid("Estado invalido: faltan las sucursales.");
+  }
+  return nextState;
+}
+
 async function writeState(nextState) {
+  assertPersistableState(nextState);
+
   if (!databaseUrl) {
     await writeJsonState(nextState);
     return;
@@ -655,6 +803,46 @@ async function writeState(nextState) {
      DO UPDATE SET data = EXCLUDED.data, updated_at = now()`,
     [1, storedState]
   );
+}
+
+// Escritura condicionada a la revision leida. En Postgres la comprobacion y la
+// escritura ocurren en la misma sentencia: sin esto, dos PUT simultaneos con la
+// misma `baseRevision` pasaban ambos el control y el segundo pisaba al primero.
+// Devuelve false si otro proceso escribio primero.
+async function writeStateIfRevision(nextState, expectedRevision) {
+  assertPersistableState(nextState);
+
+  if (!databaseUrl) {
+    const current = await readJsonState();
+    if (stateRevision(current) !== Number(expectedRevision)) return false;
+    await writeJsonState(nextState);
+    return true;
+  }
+
+  const pool = await getPostgresPool();
+  const storedState = applySystemUserAuth(nextState);
+  const result = await pool.query(
+    `UPDATE app_state
+        SET data = $1, updated_at = now()
+      WHERE id = 1
+        AND COALESCE((data ->> 'stateRevision')::numeric, 0) = $2`,
+    [storedState, Number(expectedRevision)]
+  );
+  return result.rowCount > 0;
+}
+
+// Serializa las mutaciones dentro de este proceso. Render corre una sola
+// instancia, asi que junto con la escritura condicionada cubre las carreras
+// reales entre peticiones.
+let stateMutationLock = Promise.resolve();
+
+function withStateLock(task) {
+  const next = stateMutationLock.then(task, task);
+  stateMutationLock = next.then(
+    () => {},
+    () => {}
+  );
+  return next;
 }
 
 const branchIds = ["rohrmoser", "alajuela"];
@@ -756,18 +944,47 @@ function publicUser(user) {
   return safeUser;
 }
 
+// Cambia el hash de una sola cuenta sin reescribir el documento entero. Antes
+// se guardaba el estado completo leido antes del login, asi que cualquier
+// cambio que otro usuario hubiera guardado en ese intervalo se revertia.
+async function setUserPasswordHash(userId, passwordHash) {
+  if (databaseUrl) {
+    const pool = await getPostgresPool();
+    const result = await pool.query(
+      `UPDATE app_state
+          SET data = jsonb_set(data, '{users}', (
+                SELECT jsonb_agg(
+                  CASE WHEN item ->> 'id' = $1
+                       THEN jsonb_set(item, '{passwordHash}', to_jsonb($2::text))
+                       ELSE item END
+                )
+                FROM jsonb_array_elements(data -> 'users') AS item
+              )),
+              updated_at = now()
+        WHERE id = 1
+          AND jsonb_typeof(data -> 'users') = 'array'`,
+      [userId, passwordHash]
+    );
+    return result.rowCount > 0;
+  }
+
+  return withStateLock(async () => {
+    const current = await readJsonState();
+    if (!current || !Array.isArray(current.users)) return false;
+    await writeJsonState({
+      ...current,
+      users: current.users.map((item) => (item.id === userId ? { ...item, passwordHash } : item))
+    });
+    return true;
+  });
+}
+
 // Sube un hash heredado sha256 a scrypt tras un inicio de sesion correcto.
 // Nunca debe impedir el acceso, por eso ignora cualquier fallo de escritura.
-async function upgradeLegacyHash(state, user, password) {
+async function upgradeLegacyHash(user, password) {
   if (isModernHash(user.passwordHash)) return;
   try {
-    const nextState = {
-      ...state,
-      users: state.users.map((item) =>
-        item.id === user.id ? { ...item, passwordHash: hashPasswordModern(password) } : item
-      )
-    };
-    await writeState(stampRevision(nextState, state));
+    await setUserPasswordHash(user.id, await hashPasswordModernAsync(password));
   } catch (error) {
     console.error("No se pudo actualizar el hash de contrasena:", error.message);
   }
@@ -787,7 +1004,7 @@ async function handleLogin(req, res) {
   const users = Array.isArray(state.users) ? state.users : [];
   const user = users.find((item) => email && String(item.email || "").trim().toLowerCase() === email);
 
-  if (!user || user.active === false || !verifyPassword(password, user.passwordHash)) {
+  if (!user || user.active === false || !(await verifyPasswordAsync(password, user.passwordHash))) {
     recordFailedLogin(req, email);
     if (isLoginRateLimited(req, email)) {
       sendError(req, res, 429, "Demasiados intentos. Espere unos minutos e intente de nuevo.");
@@ -798,7 +1015,7 @@ async function handleLogin(req, res) {
   }
 
   clearFailedLogins(req, email);
-  await upgradeLegacyHash(state, user, password);
+  await upgradeLegacyHash(user, password);
   const session = await createSession(user, req);
   sendJson(req, res, 200, {
     ok: true,
@@ -840,19 +1057,23 @@ async function handlePasswordChange(req, res, session) {
     return;
   }
 
-  if (isSelf && !verifyPassword(String(payload.currentPassword || ""), target.passwordHash)) {
+  if (isSelf && !(await verifyPasswordAsync(String(payload.currentPassword || ""), target.passwordHash))) {
     sendError(req, res, 401, "La contrasena actual no es correcta.");
     return;
   }
 
-  const nextState = {
-    ...state,
-    users: state.users.map((item) =>
-      item.id === target.id ? { ...item, passwordHash: hashPasswordModern(newPassword) } : item
-    )
-  };
-  addAuditEntry(nextState, actor, isSelf ? "password.change" : "password.reset", [`users:${target.id}`]);
-  await writeState(stampRevision(nextState, state));
+  const passwordHash = await hashPasswordModernAsync(newPassword);
+  await withStateLock(async () => {
+    const freshState = await ensureState();
+    const nextState = {
+      ...freshState,
+      users: (freshState.users || []).map((item) =>
+        item.id === target.id ? { ...item, passwordHash } : item
+      )
+    };
+    addAuditEntry(nextState, actor, isSelf ? "password.change" : "password.reset", [`users:${target.id}`]);
+    await writeState(stampRevision(nextState, freshState));
+  });
   sendJson(req, res, 200, { ok: true });
 }
 
@@ -964,7 +1185,13 @@ async function handleApi(req, res, url) {
     return;
   }
 
-  const session = (await sessionFromRequest(req)) || (await sessionFromQuery(url));
+  // El token por query solo se acepta donde el navegador no puede poner
+  // cabeceras: el `src` de una imagen y el EventSource del tiempo real. En el
+  // resto de rutas se exige Authorization, porque los query strings quedan
+  // escritos en los registros del proxy y en el historial del navegador.
+  const allowsQueryToken =
+    req.method === "GET" && (pathname === "/api/events" || pathname.startsWith("/api/media/"));
+  const session = (await sessionFromRequest(req)) || (allowsQueryToken ? await sessionFromQuery(url) : null);
   if (!session) {
     sendError(req, res, 401, "Sesion requerida.");
     return;
@@ -1028,10 +1255,21 @@ async function handleApi(req, res, url) {
       return;
     }
 
-    const restoredState = preserveProtectedState(nextState, currentState);
-    const collections = changedCollections(restoredState, currentState);
-    addAuditEntry(restoredState, user, "backup.restore", collections);
-    await writeState(stampRevision(restoredState, currentState));
+    let collections;
+    try {
+      collections = await withStateLock(async () => {
+        const freshState = await ensureState();
+        const restoredState = preserveProtectedState(nextState, freshState);
+        const changed = changedCollections(restoredState, freshState);
+        addAuditEntry(restoredState, user, "backup.restore", changed);
+        await writeState(stampRevision(restoredState, freshState));
+        return changed;
+      });
+    } catch (error) {
+      sendError(req, res, error.statusCode || 400, error.message || "Respaldo invalido.");
+      return;
+    }
+
     broadcastStateUpdated(session, collections);
     sendJson(req, res, 200, { ok: true });
     return;
@@ -1057,43 +1295,59 @@ async function handleApi(req, res, url) {
       return;
     }
 
-    const currentState = await ensureState();
-
     // Control de concurrencia optimista: sin esto, dos personas guardando con
     // segundos de diferencia hacen que la segunda escritura borre la primera.
-    const currentRevision = stateRevision(currentState);
-    if (payload.baseRevision !== undefined && Number(payload.baseRevision) !== currentRevision) {
-      sendJson(req, res, 409, {
-        ok: false,
-        code: "STATE_CONFLICT",
-        message: "Otro usuario guardo primero. Vuelva a cargar los datos antes de guardar.",
-        stateRevision: currentRevision,
-        state: stripSensitiveState(currentState)
-      });
-      return;
-    }
-
-    let writableState;
+    // `baseRevision` es obligatorio: omitirlo saltaba el control entero, asi
+    // que un cliente desactualizado pisaba en silencio lo de los demas. Si
+    // falta o no coincide se responde 409 con el estado vigente, que es lo que
+    // el navegador ya sabe fusionar y reintentar.
+    let result;
     try {
-      writableState = applyWritePolicy(nextState, currentState, session);
+      result = await withStateLock(async () => {
+        const currentState = await ensureState();
+        const currentRevision = stateRevision(currentState);
+
+        if (payload.baseRevision === undefined || Number(payload.baseRevision) !== currentRevision) {
+          return { conflict: true, currentState, currentRevision };
+        }
+
+        const writableState = applyWritePolicy(nextState, currentState, session);
+        const collections = changedCollections(writableState, currentState);
+        const savedState = stampRevision(writableState, currentState);
+
+        if (!(await writeStateIfRevision(savedState, currentRevision))) {
+          const freshState = await ensureState();
+          return { conflict: true, currentState: freshState, currentRevision: stateRevision(freshState) };
+        }
+
+        return { savedState, collections };
+      });
     } catch (error) {
       sendError(req, res, error.statusCode || 403, error.message || "No tiene permiso para guardar esos cambios.");
       return;
     }
-    const collections = changedCollections(writableState, currentState);
-    const savedState = stampRevision(writableState, currentState);
-    await writeState(savedState);
+
+    if (result.conflict) {
+      sendJson(req, res, 409, {
+        ok: false,
+        code: "STATE_CONFLICT",
+        message: "Otro usuario guardo primero. Vuelva a cargar los datos antes de guardar.",
+        stateRevision: result.currentRevision,
+        state: stripSensitiveState(result.currentState)
+      });
+      return;
+    }
 
     // Si un producto con foto se elimina o se le cambia la imagen, el archivo
     // anterior deja de estar referenciado y no debe quedarse ocupando espacio.
-    if (collections.some((name) => name.endsWith("products"))) {
+    if (result.collections.some((name) => name.endsWith("products"))) {
       mediaStore
-        .collectOrphans(referencedImageIds(savedState))
+        .collectOrphans(referencedImageIds(result.savedState))
         .catch((error) => console.error("No se pudieron limpiar imágenes huérfanas:", error.message));
     }
 
-    broadcastStateUpdated(session, collections);
-    sendJson(req, res, 200, { ok: true, stateRevision: stateRevision(savedState) });
+    broadcastStateUpdated(session, result.collections);
+    sendJson(req, res, 200, { ok: true, stateRevision: stateRevision(result.savedState) });
     return;
   }
 
@@ -1228,9 +1482,14 @@ module.exports = {
   isFullAccessUser,
   hashPassword,
   hashPasswordModern,
+  hashPasswordModernAsync,
   verifyPassword,
+  verifyPasswordAsync,
+  assertPersistableState,
+  clientIp,
   stateRevision,
   stampRevision,
   bootstrapState,
-  referencedImageIds
+  referencedImageIds,
+  mergeStockOnlyProducts
 };

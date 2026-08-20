@@ -19,7 +19,7 @@
   /* texto */
   --ink: #16211f;
   --ink-2: #40514e;
-  --ink-3: #6b7c78;
+  --ink-3: #5c6b67; /* 4,6:1 incluso sobre surface-3, el fondo mas oscuro del tema claro */
 
   /* marca */
   --mint: #9bc9c3;
@@ -2304,7 +2304,7 @@ th.num {
     --line-strong: #3a4b48;
     --ink: #e6ede9;
     --ink-2: #bcc9c5;
-    --ink-3: #8a9a96;
+    --ink-3: #8ea09b; /* 4,8:1 en el peor fondo del tema oscuro */
     --mint-soft: #1a2e2b;
     --brand: #7fc4b8;
     --brand-hover: #97d2c7;
@@ -2335,7 +2335,7 @@ th.num {
   --line-strong: #3a4b48;
   --ink: #e6ede9;
   --ink-2: #bcc9c5;
-  --ink-3: #8a9a96;
+  --ink-3: #8ea09b; /* 4,8:1 en el peor fondo del tema oscuro */
   --mint-soft: #1a2e2b;
   --brand: #7fc4b8;
   --brand-hover: #97d2c7;

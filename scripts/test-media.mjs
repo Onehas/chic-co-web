@@ -93,7 +93,14 @@ assert.equal(await media.readImage("zzz"), null, "no acepta identificadores mal 
 
 const keeper = await media.saveImage({ dataUrl: png.toString("base64"), ownerId: "PRD-002" });
 
-const removed = await media.collectOrphans([keeper.id]);
+// Periodo de gracia: el navegador sube la foto y solo despues guarda el estado
+// con su id. Mientras tanto la imagen esta sin referenciar, y cualquier
+// guardado que toque productos -facturar descuenta stock- dispara la limpieza.
+// Con el periodo de gracia por defecto, esa foto recien subida no se toca.
+assert.equal(await media.collectOrphans([]), 0, "no borra fotos recién subidas");
+assert.ok(await media.readImage(saved.id), "la foto en curso de asignación sobrevive");
+
+const removed = await media.collectOrphans([keeper.id], { graceMs: 0 });
 assert.equal(removed, 1, "borra exactamente la imagen que ya nadie referencia");
 assert.equal(await media.readImage(saved.id), null, "la huérfana desaparece");
 assert.ok(await media.readImage(keeper.id), "la referenciada sobrevive");

@@ -482,41 +482,46 @@ async function saveDocumentDraft(validation) {
     return rowToDocument(result.rows[0]);
   }
 
-  const store = await readJsonFile(phase3Path, { documents: [], counters: {}, auditLog: [] });
-  const documents = Array.isArray(store.documents) ? store.documents : [];
-  const existingIndex = documents.findIndex(
-    (item) =>
-      item.branchId === validation.branchId &&
-      item.invoiceId === validation.invoiceId &&
-      item.documentType === validation.documentType
-  );
-  const current = existingIndex >= 0 ? documents[existingIndex] : {};
-  const document = {
-    ...current,
-    id: current.id || crypto.randomUUID(),
-    branchId: validation.branchId,
-    invoiceId: validation.invoiceId,
-    documentType: validation.documentType,
-    documentTypeLabel: documentTypes[validation.documentType],
-    clave: "",
-    consecutivo: "",
-    issuedAt: "",
-    environment: validation.config.environment || "Sandbox",
-    internalStatus: status,
-    haciendaStatus: "",
-    validationStatus: status,
-    validationErrors: validation.findings,
-    totals: validation.totals,
-    payload,
-    attemptCount: Number(current.attemptCount || 0),
-    createdAt: current.createdAt || timestamp,
-    updatedAt: timestamp
-  };
-  if (existingIndex >= 0) documents[existingIndex] = document;
-  else documents.unshift(document);
-  store.documents = documents.slice(0, 300);
-  await writeJsonFile(phase3Path, store);
-  return document;
+  // El mismo archivo lo escriben el contador de consecutivos y la bitacora, que
+  // si toman el lock. Sin el, un borrador guardado a la vez que un consecutivo
+  // pisaba el contador y podia repetir un consecutivo fiscal.
+  return withFileLock(phase3Path, async () => {
+    const store = await readJsonFile(phase3Path, { documents: [], counters: {}, auditLog: [] });
+    const documents = Array.isArray(store.documents) ? store.documents : [];
+    const existingIndex = documents.findIndex(
+      (item) =>
+        item.branchId === validation.branchId &&
+        item.invoiceId === validation.invoiceId &&
+        item.documentType === validation.documentType
+    );
+    const current = existingIndex >= 0 ? documents[existingIndex] : {};
+    const document = {
+      ...current,
+      id: current.id || crypto.randomUUID(),
+      branchId: validation.branchId,
+      invoiceId: validation.invoiceId,
+      documentType: validation.documentType,
+      documentTypeLabel: documentTypes[validation.documentType],
+      clave: "",
+      consecutivo: "",
+      issuedAt: "",
+      environment: validation.config.environment || "Sandbox",
+      internalStatus: status,
+      haciendaStatus: "",
+      validationStatus: status,
+      validationErrors: validation.findings,
+      totals: validation.totals,
+      payload,
+      attemptCount: Number(current.attemptCount || 0),
+      createdAt: current.createdAt || timestamp,
+      updatedAt: timestamp
+    };
+    if (existingIndex >= 0) documents[existingIndex] = document;
+    else documents.unshift(document);
+    store.documents = documents.slice(0, 300);
+    await writeJsonFile(phase3Path, store);
+    return document;
+  });
 }
 
 async function writeAudit(entry) {
@@ -529,9 +534,11 @@ async function writeAudit(entry) {
     );
     return;
   }
-  const store = await readJsonFile(phase3Path, { documents: [], counters: {}, auditLog: [] });
-  store.auditLog = [entry, ...(store.auditLog || [])].slice(0, 300);
-  await writeJsonFile(phase3Path, store);
+  await withFileLock(phase3Path, async () => {
+    const store = await readJsonFile(phase3Path, { documents: [], counters: {}, auditLog: [] });
+    store.auditLog = [entry, ...(store.auditLog || [])].slice(0, 300);
+    await writeJsonFile(phase3Path, store);
+  });
 }
 
 async function handlePhase3Api(req, res, url) {
