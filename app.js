@@ -395,6 +395,17 @@ function normalizeStateSnapshot(snapshot) {
     return branches;
   }, {});
 
+  // Conserva cualquier sucursal guardada que todavia no este en branchOptions.
+  // Escalar el negocio a una tercera sucursal no debe perder su data solo
+  // porque el selector aun no la lista: sus datos viajan intactos (y el
+  // dashboard los suma) hasta que se agregue a branchOptions y sea navegable.
+  const knownBranchIds = new Set(branchOptions.map((branch) => branch.id));
+  Object.keys(savedBranches).forEach((branchId) => {
+    if (!knownBranchIds.has(branchId)) {
+      merged.branches[branchId] = normalizeBranchData(savedBranches[branchId], emptyBranchData());
+    }
+  });
+
   merged.currentBranchId = branchOptions.some((branch) => branch.id === merged.currentBranchId)
     ? merged.currentBranchId
     : "rohrmoser";

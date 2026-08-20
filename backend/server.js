@@ -2236,5 +2236,12 @@ module.exports = {
   stampRevision,
   bootstrapState,
   referencedImageIds,
-  mergeStockOnlyProducts
+  mergeStockOnlyProducts,
+  // El esquema de sucursales y colecciones se exporta para que una prueba de
+  // paridad verifique que el cliente (app.js: branchDataKeys / branchOptions)
+  // no se desincronice del servidor. Una divergencia hace que una coleccion
+  // deje de persistir en silencio: exactamente lo que no queremos al escalar.
+  branchDataCollections,
+  branchIds,
+  moduleWriteCollections
 };
