@@ -2135,8 +2135,6 @@ if (require.main === module) {
   });
 }
 
-// Las capas fiscales vuelven a registrar el manejador de peticiones sobre este
-// mismo servidor, asi que el arranque real puede venir de cualquiera de ellas.
 // El temporizador se enciende una sola vez, cuando el servidor empieza a oir.
 server.on("listening", () => {
   // El estado para el reporte y el respaldo se entrega hidratado, para que la
@@ -2153,8 +2151,8 @@ module.exports = {
   preserveProtectedState,
   stripSensitiveState,
   applySystemUserAuth,
-  // Reutilizados por las capas de Hacienda para no autenticarse por HTTP
-  // contra su propio proceso.
+  // Expuestos para las pruebas y para cualquier capa que quiera leer el estado
+  // sin autenticarse por HTTP contra su propio proceso.
   ensureState,
   readState,
   sessionFromRequest,

@@ -49,7 +49,6 @@ La version online guarda los datos en Postgres y valida el login desde la API. E
 | `CHIC_BOOTSTRAP_PASSWORD` | Contrasena de ese super usuario. Se guarda cifrada con scrypt. |
 | `CHIC_RECEPCION_PASSWORD_HASH` | Hash inicial de la cuenta de recepcion. |
 | `CHIC_MONICA_PASSWORD_HASH` | Hash inicial de la cuenta de Monica. |
-| `HACIENDA_SECRET_KEY` | Cifra los secretos fiscales. Minimo 24 caracteres. |
 | `RESEND_API_KEY` | Clave de Resend. Sin ella no se envia ningun correo, pero nada mas se rompe. |
 | `RESEND_FROM` | Remitente verificado en Resend, p. ej. `Chic & Co <citas@chicco.cr>`. |
 | `RESEND_REPLY_TO` | Opcional. A donde contestan las clientas si responden un correo. |

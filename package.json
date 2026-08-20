@@ -4,9 +4,9 @@
   "private": true,
   "description": "App web Chic & Co con backend y datos online.",
   "scripts": {
-    "start": "node backend/server-phase5.js",
-    "dev": "node backend/server-phase5.js",
-    "test": "node scripts/test-security-policy.mjs && node scripts/test-auth.mjs && node scripts/test-fiscal.mjs && node scripts/test-media.mjs && node scripts/test-booking.mjs && node scripts/test-alegra.mjs && node scripts/test-overlay.mjs"
+    "start": "node backend/server.js",
+    "dev": "node backend/server.js",
+    "test": "node scripts/test-security-policy.mjs && node scripts/test-auth.mjs && node scripts/test-media.mjs && node scripts/test-booking.mjs && node scripts/test-alegra.mjs && node scripts/test-overlay.mjs"
   },
   "dependencies": {
     "pg": "8.20.0"

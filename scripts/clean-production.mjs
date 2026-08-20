@@ -448,12 +448,6 @@ html = html.replace(
   new RegExp(`<button class="secondary-action" type="button" id="resetDataButton">${legacyResetButtonText}<\\\\/button>`, "g"),
   '<button class="secondary-action" type="button" id="resetDataButton" hidden aria-hidden="true" tabindex="-1"></button>'
 );
-if (!html.includes("hacienda.js")) {
-  html = html.replace(
-    '<script src="production-tools.js"></script>',
-    '<script src="production-tools.js"></script>\n    <script src="hacienda.js"></script>'
-  );
-}
 writeIfChanged("index.html", html);
 
 let server = readFileSync("backend/server.js", "utf8");

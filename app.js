@@ -982,8 +982,8 @@ function renderView() {
   const search = elements.searchInput.value;
 
   // El título y la descripción del módulo ya están en la cabecera de arriba.
-  // Estos nodos se dejan vacíos —y el CSS los colapsa— pero deben existir:
-  // el módulo Hacienda escribe en ellos.
+  // Estos nodos se dejan vacíos —y el CSS los colapsa— pero deben existir por
+  // si algún módulo quiere escribir un subtítulo propio.
   elements.viewEyebrow.textContent = "";
   elements.viewTitle.textContent = "";
   elements.viewSubtitle.textContent = "";
