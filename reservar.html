@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Reservar cita · Chic &amp; Co</title>
+    <meta name="description" content="Solicita tu cita en Chic & Co. Elige el servicio, el dia y la hora." />
+    <link rel="icon" href="assets/chic-co-logo-black.png" />
+    <link rel="stylesheet" href="reservar.css" />
+  </head>
+  <body>
+    <main class="booking" id="booking">
+      <header class="booking-head">
+        <div class="booking-logo">
+          <img src="assets/chic-co-logo-black.png" alt="Chic &amp; Co" />
+        </div>
+        <p class="eyebrow">Chic &amp; Co</p>
+        <h1>Reservar una cita</h1>
+        <p class="lead">
+          Elige el servicio, el dia y la hora. Te confirmamos por WhatsApp o correo antes de apartarte el espacio.
+        </p>
+      </header>
+
+      <!-- Los cuatro pasos existen desde el principio en el marcado; el guion
+           solo revela el siguiente. Asi el formulario funciona aunque falle
+           una peticion a mitad de camino. -->
+      <form class="booking-form" id="bookingForm" autocomplete="on" novalidate>
+        <ol class="steps" id="steps">
+          <li class="step is-active" data-step="1">
+            <h2><span class="step-number">1</span> Sucursal y servicio</h2>
+
+            <label class="field">
+              <span>Sucursal</span>
+              <select id="branchSelect" name="branchId" required></select>
+            </label>
+
+            <label class="field">
+              <span>Servicio</span>
+              <select id="procedureSelect" name="procedureId" required></select>
+            </label>
+
+            <p class="service-detail" id="serviceDetail"></p>
+          </li>
+
+          <li class="step" data-step="2">
+            <h2><span class="step-number">2</span> Dia</h2>
+
+            <label class="field">
+              <span>Fecha</span>
+              <input type="date" id="dateInput" name="date" required />
+            </label>
+
+            <div class="day-hint" id="dayHint"></div>
+          </li>
+
+          <li class="step" data-step="3">
+            <h2><span class="step-number">3</span> Hora</h2>
+            <div class="slots" id="slots" role="group" aria-label="Horarios disponibles"></div>
+            <p class="slots-empty" id="slotsEmpty">Elige primero una fecha.</p>
+          </li>
+
+          <li class="step" data-step="4">
+            <h2><span class="step-number">4</span> Tus datos</h2>
+
+            <label class="field">
+              <span>Nombre completo</span>
+              <input type="text" id="nameInput" name="clientName" autocomplete="name" required />
+            </label>
+
+            <label class="field">
+              <span>WhatsApp</span>
+              <input
+                type="tel"
+                id="phoneInput"
+                name="clientPhone"
+                inputmode="numeric"
+                autocomplete="tel"
+                placeholder="8888 8888"
+                required
+              />
+              <small>Ocho digitos. Es por donde te confirmamos.</small>
+            </label>
+
+            <label class="field">
+              <span>Correo</span>
+              <input
+                type="email"
+                id="emailInput"
+                name="clientEmail"
+                autocomplete="email"
+                placeholder="correo@dominio.com"
+                required
+              />
+            </label>
+
+            <label class="field">
+              <span>Algo que debamos saber <em>(opcional)</em></span>
+              <textarea id="notesInput" name="notes" rows="3" maxlength="400"></textarea>
+            </label>
+
+            <!-- Trampa para robots: invisible y fuera del recorrido del
+                 tabulador, asi que solo la rellena algo automatizado. -->
+            <div class="trap" aria-hidden="true">
+              <label>
+                No llenar
+                <input type="text" id="websiteInput" name="website" tabindex="-1" autocomplete="off" />
+              </label>
+            </div>
+          </li>
+        </ol>
+
+        <div class="summary" id="summary" hidden></div>
+
+        <p class="form-error" id="formError" role="alert" aria-live="polite"></p>
+
+        <button class="submit" type="submit" id="submitButton" disabled>
+          <span id="submitLabel">Completa los pasos</span>
+        </button>
+
+        <p class="disclaimer">
+          Al enviar, quedas anotada como <strong>solicitud</strong>. La cita se confirma cuando te
+          escribamos.
+        </p>
+      </form>
+
+      <section class="done" id="done" hidden aria-live="polite">
+        <div class="done-mark" aria-hidden="true">✓</div>
+        <h2>Listo, recibimos tu solicitud</h2>
+        <p id="doneDetail"></p>
+        <p class="done-note">
+          Te enviamos un correo con el resumen. Te escribimos pronto para confirmarte el horario.
+        </p>
+        <button class="secondary" type="button" id="againButton">Reservar otra cita</button>
+      </section>
+    </main>
+
+    <script src="reservar.js"></script>
+  </body>
+</html>

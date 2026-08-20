@@ -273,22 +273,74 @@
   // Toma el estado del servidor y le vuelve a aplicar solo las colecciones que
   // este navegador cambio desde la ultima confirmacion. Asi, si recepcion edito
   // clientes y otra persona edito facturas, sobreviven los dos cambios.
+  // Fusion de tres vias por identificador.
+  //
+  // Antes, si mi coleccion diferia en algo de mi copia base, se reemplazaba la
+  // del servidor ENTERA por la mia. Eso borraba en silencio cualquier registro
+  // que el servidor hubiera creado y este navegador nunca hubiera visto: por
+  // ejemplo la ficha de clienta que se crea al confirmar una reserva de la web
+  // desde otra pantalla. La cita quedaba apuntando a un cliente inexistente.
+  //
+  // Ahora se parte de lo que tiene el servidor y encima se aplica solo lo que
+  // yo cambie de verdad: lo que agregue, lo que edite y lo que borre.
+  function mergeCollection(baseList, myList, theirList) {
+    const hasIds = [baseList, myList, theirList].every(
+      (list) => !Array.isArray(list) || list.every((item) => item && item.id)
+    );
+    // Sin identificadores no hay forma de casar registros; se conserva el
+    // comportamiento anterior antes que fusionar a ciegas.
+    if (!hasIds) {
+      return sameCollection(myList, baseList) ? snapshotClone(theirList || []) : snapshotClone(myList || []);
+    }
+
+    const byId = (list) => new Map((list || []).map((item) => [item.id, item]));
+    const base = byId(baseList);
+    const mine = byId(myList);
+    const theirs = byId(theirList);
+    const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
+
+    const result = new Map(theirs);
+
+    // Lo que yo borre se borra, salvo que el servidor lo haya modificado
+    // despues: en ese caso hubo un cambio real y no se descarta en silencio.
+    base.forEach((item, id) => {
+      if (mine.has(id)) return;
+      const theirItem = theirs.get(id);
+      if (!theirItem || same(theirItem, item)) result.delete(id);
+    });
+
+    // Lo que yo agregue o edite manda sobre lo del servidor.
+    const added = [];
+    mine.forEach((item, id) => {
+      const baseItem = base.get(id);
+      if (!baseItem) {
+        added.push(item);
+        result.set(id, item);
+        return;
+      }
+      if (!same(item, baseItem)) result.set(id, item);
+    });
+
+    // La aplicacion agrega siempre al principio, asi que lo mio recien creado
+    // va delante para que aparezca donde la persona espera verlo.
+    const addedIds = new Set(added.map((item) => item.id));
+    return snapshotClone([...added, ...[...result.values()].filter((item) => !addedIds.has(item.id))]);
+  }
+
   function mergeAgainstServer(base, mine, theirs) {
     const merged = normalizeStateSnapshot(theirs);
 
     branchOptions.forEach((branch) => {
       branchDataKeys.forEach((key) => {
-        const baseData = base?.branches?.[branch.id]?.[key];
-        const myData = mine?.branches?.[branch.id]?.[key];
-        if (!sameCollection(myData, baseData)) {
-          merged.branches[branch.id][key] = snapshotClone(myData || []);
-        }
+        merged.branches[branch.id][key] = mergeCollection(
+          base?.branches?.[branch.id]?.[key],
+          mine?.branches?.[branch.id]?.[key],
+          merged.branches[branch.id][key]
+        );
       });
     });
 
-    if (!sameCollection(mine?.users, base?.users)) {
-      merged.users = snapshotClone(mine.users);
-    }
+    merged.users = mergeCollection(base?.users, mine?.users, merged.users);
 
     if (branchOptions.some((branch) => branch.id === mine?.currentBranchId)) {
       merged.currentBranchId = mine.currentBranchId;
@@ -331,14 +383,38 @@
     }
   }
 
+  // Cuantas coincidencias con los datos de demostracion hacen falta para dar
+  // por hecho que se trata de una instalacion de prueba y no de datos reales.
+  //
+  // La huella es solo el identificador mas el nombre, y eso no distingue nada:
+  // "Limpieza facial profunda" o una clienta llamada "Maria Lopez" son nombres
+  // corrientes en un salon de verdad. Con la regla anterior, el primer servicio
+  // que alguien creara con uno de esos nombres se borraba solo en cuanto la
+  // aplicacion recargaba el estado -y arrastraba sus citas, que quedaban
+  // apuntando a un procedimiento inexistente-. La demostracion original traia
+  // veintiseis registros; exigir cuatro a la vez la reconoce sin falsos
+  // positivos posibles en la practica.
+  const seedCleanupThreshold = 4;
+
+  function countSeedMatches(target) {
+    if (!target || typeof target !== "object") return 0;
+    return Object.entries(seedRecordFingerprints).reduce((total, [collectionName, fingerprints]) => {
+      if (!Array.isArray(target[collectionName])) return total;
+      return total + target[collectionName].filter((item) => matchesFingerprint(item, fingerprints[item?.id])).length;
+    }, 0);
+  }
+
   function removeSeedRecords(targetState) {
     if (!targetState || typeof targetState !== "object") return false;
+
+    const branchValues = Object.values(targetState.branches || {});
+    const matches = [targetState, ...branchValues].reduce((total, target) => total + countSeedMatches(target), 0);
+    if (matches < seedCleanupThreshold) return false;
+
     let changed = cleanCollections(targetState);
-    if (targetState.branches && typeof targetState.branches === "object") {
-      Object.values(targetState.branches).forEach((branchData) => {
-        changed = cleanCollections(branchData) || changed;
-      });
-    }
+    branchValues.forEach((branchData) => {
+      changed = cleanCollections(branchData) || changed;
+    });
     return changed;
   }
 
@@ -475,6 +551,12 @@
     if (!isBackendAvailable() || !backendAuthToken()) return;
     window.clearTimeout(bridgeSaveTimer);
     bridgeSaveTimer = window.setTimeout(() => {
+      // Hay que soltar el identificador al disparar. refreshStateFromBackend se
+      // rinde mientras bridgeSaveTimer tenga valor, asi que dejarlo puesto
+      // significaba que, tras el primer guardado de la sesion, este navegador
+      // no volvia a traer NUNCA los cambios de los demas: el evento en vivo
+      // llegaba, llamaba a la funcion y esta se iba sin hacer nada.
+      bridgeSaveTimer = null;
       syncStateToBackend();
     }, immediate ? 0 : 250);
   };
