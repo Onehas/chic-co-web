@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import assert from "node:assert/strict";
 
 const require = createRequire(import.meta.url);
-const { applyWritePolicy, stripSensitiveState, assertPersistableState, clientIp } = require("../backend/server.js");
+const { applyWritePolicy, stripSensitiveState, assertPersistableState, clientIp, clampUserRoles, contentSecurityPolicy } = require("../backend/server.js");
 
 const permissions = {
   clientes: { read: true, write: true },
@@ -211,5 +211,44 @@ const spoofed = {
   socket: { remoteAddress: "127.0.0.1" }
 };
 assert.equal(clientIp(spoofed), "127.0.0.1", "ignora X-Forwarded-For sin proxys de confianza declarados");
+
+/* --- No hay escalada de privilegios por la coleccion `users` ------------- */
+
+const userTree = {
+  users: [
+    { id: "USR-000", role: "super", active: true },
+    { id: "ADM", role: "admin", active: true },
+    { id: "REC", role: "recepcion", active: true }
+  ]
+};
+const asAdmin = { id: "ADM", role: "admin", active: true };
+const asSuper = { id: "USR-000", role: "super", active: true };
+
+// Un admin no puede auto-promoverse a super.
+const selfEscalate = clampUserRoles([{ id: "ADM", role: "super", active: true }], userTree, asAdmin);
+assert.equal(selfEscalate[0].role, "admin", "un admin no puede subirse a si mismo a super");
+
+// Un no-super (admin) no puede promover a otra cuenta a super.
+const promoteOther = clampUserRoles([{ id: "REC", role: "super", active: true }], userTree, asAdmin);
+assert.equal(promoteOther[0].role, "recepcion", "un admin no puede convertir a otro en super");
+
+// Un no-super no puede crear una cuenta nueva ya como super.
+const mintSuper = clampUserRoles([{ id: "NEW", role: "super", active: true }], userTree, asAdmin);
+assert.equal(mintSuper[0].role, "recepcion", "un rol nuevo super creado por un no-super cae a recepcion");
+
+// Un super si puede otorgar el rol super.
+const superGrants = clampUserRoles([{ id: "REC", role: "super", active: true }], userTree, asSuper);
+assert.equal(superGrants[0].role, "super", "un super si puede otorgar el rol super");
+
+/* --- CSP: la pagina publica permite pixeles, el back-office no ----------- */
+
+const publicCsp = contentSecurityPolicy("/reservar.html");
+assert.ok(publicCsp.includes("connect.facebook.net"), "reservar permite el script de Meta");
+assert.ok(publicCsp.includes("googletagmanager.com"), "reservar permite el script de GA4");
+assert.ok(publicCsp.includes("analytics.tiktok.com"), "reservar permite el script de TikTok");
+
+const backofficeCsp = contentSecurityPolicy("/index.html");
+assert.ok(backofficeCsp.includes("connect-src 'self'"), "el back-office mantiene connect-src estricto");
+assert.ok(!/facebook|tiktok|googletagmanager/.test(backofficeCsp), "el back-office no abre hosts de pixeles");
 
 console.log("Security policy tests passed");

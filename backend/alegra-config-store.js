@@ -21,6 +21,9 @@ async function pool() {
   if (!pgPool) {
     const { Pool } = require("pg");
     pgPool = new Pool({ connectionString: databaseUrl, max: 2 });
+    // Sin este listener, un cliente ocioso que Postgres cierra (reinicio,
+    // timeout de red) emite un 'error' sin manejar y TUMBA el proceso entero.
+    pgPool.on("error", (error) => console.error("Pool de Postgres (idle) fallo:", error.message));
   }
   if (!pgReady) {
     await pgPool.query(`
