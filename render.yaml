@@ -21,3 +21,16 @@ services:
         fromDatabase:
           name: chic-co-db
           property: connectionString
+      # Se definen en el panel de Render, nunca en el repositorio.
+      # Sin las dos primeras, una base de datos nueva queda sin super usuario.
+      - key: CHIC_BOOTSTRAP_EMAIL
+        sync: false
+      - key: CHIC_BOOTSTRAP_PASSWORD
+        sync: false
+      - key: CHIC_RECEPCION_PASSWORD_HASH
+        sync: false
+      - key: CHIC_MONICA_PASSWORD_HASH
+        sync: false
+      # Cifra los secretos fiscales (.p12, PIN, contrasena ATV). Minimo 24 caracteres.
+      - key: HACIENDA_SECRET_KEY
+        sync: false

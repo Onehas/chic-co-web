@@ -4,123 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Chic & Co Salon Software</title>
+    <link rel="icon" href="assets/chic-co-logo-black.png" />
     <link rel="stylesheet" href="styles.css" />
-    <style>
-      body {
-        background:
-          radial-gradient(circle at 84% 18%, rgba(155, 201, 195, 0.2), transparent 34rem),
-          linear-gradient(180deg, #fbfaf3 0%, #f2f7f1 54%, #fbf7eb 100%);
-      }
-
-      body::before {
-        inset: 0;
-        background: url("assets/chic-co-watermark.png") -32px 18px / 320px 320px repeat;
-        opacity: 0.11;
-      }
-
-      .login-screen {
-        min-height: 100svh;
-        padding: 24px;
-      }
-
-      .login-panel,
-      .login-card {
-        display: grid;
-        gap: 14px;
-        width: min(calc(100vw - 32px), 386px);
-        padding: 24px;
-        color: #fff;
-        background:
-          linear-gradient(180deg, rgba(14, 16, 15, 0.98), rgba(42, 42, 38, 0.98)),
-          rgba(14, 15, 14, 0.9);
-        border: 1px solid rgba(240, 212, 162, 0.22);
-        border-radius: 8px;
-        box-shadow: 0 26px 70px rgba(0, 0, 0, 0.32);
-      }
-
-      .login-brand {
-        display: grid;
-        gap: 12px;
-      }
-
-      .login-logo-frame {
-        display: grid;
-        place-items: center;
-        width: 100%;
-        height: 158px;
-        padding: 14px;
-        background: #050505;
-        border: 1px solid rgba(240, 212, 162, 0.24);
-        border-radius: 8px;
-      }
-
-      .login-logo-frame img,
-      .login-brand .login-logo-frame img {
-        width: 128px;
-        height: 128px;
-        max-height: none;
-        padding: 0;
-        object-fit: contain;
-        background: transparent;
-        border: 0;
-      }
-
-      .login-brand .eyebrow,
-      .login-brand > span {
-        margin: 0 0 2px;
-        color: rgba(95, 137, 134, 0.62);
-        font-size: 11px;
-        font-weight: 900;
-        letter-spacing: 0;
-        text-transform: uppercase;
-      }
-
-      .login-brand h1 {
-        margin: 0;
-        color: #fff;
-        font-size: 26px;
-        line-height: 1.05;
-      }
-
-      .login-form {
-        gap: 12px;
-      }
-
-      .login-form .field span {
-        color: rgba(255, 255, 255, 0.76);
-        font-size: 11px;
-      }
-
-      .login-form input {
-        min-height: 36px;
-        color: #242424;
-        background: rgba(255, 255, 255, 0.96);
-        border-color: rgba(255, 255, 255, 0.22);
-        border-radius: 6px;
-      }
-
-      .login-form input::placeholder {
-        color: rgba(36, 49, 50, 0.52);
-      }
-
-      .login-form input:focus {
-        border-color: rgba(155, 201, 195, 0.9);
-        box-shadow: 0 0 0 3px rgba(155, 201, 195, 0.24);
-      }
-
-      .login-error {
-        min-height: 16px;
-        color: #ffd8d0;
-        font-size: 12px;
-      }
-
-      .login-form .primary-action {
-        min-height: 34px;
-        margin-top: 2px;
-        background: #44413f;
-        border-radius: 6px;
-      }
-    </style>
   </head>
   <body class="is-login">
     <section class="login-screen" id="loginScreen" aria-labelledby="loginTitle">
@@ -138,12 +23,12 @@
         <form class="login-form" id="loginForm" autocomplete="off">
           <label class="field">
             <span>Email</span>
-            <input id="loginEmail" name="email" type="email" placeholder="correo@dominio.com" required />
+            <input id="loginEmail" name="email" type="email" autocomplete="username" placeholder="correo@dominio.com" required />
           </label>
 
           <label class="field">
             <span>Contrasena</span>
-            <input id="loginPassword" name="password" type="password" required />
+            <input id="loginPassword" name="password" type="password" autocomplete="current-password" required />
           </label>
 
           <p class="login-error" id="loginError" role="alert" aria-live="polite"></p>
@@ -163,13 +48,14 @@
 
       <nav class="main-nav" aria-label="Navegacion principal">
         <button class="nav-link has-menu" type="button" data-menu="sucursal">
+          <span class="branch-dot" aria-hidden="true"></span>
           Sucursal
           <span class="chevron">v</span>
         </button>
       </nav>
 
       <div class="top-actions">
-        <button class="icon-button" type="button" data-quick="sync" aria-label="Sincronizar">
+        <button class="icon-button" type="button" data-quick="sync" aria-label="Sincronizar ahora" title="Sincronizar ahora">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M20 6v5h-5" />
             <path d="M4 18v-5h5" />
@@ -177,16 +63,8 @@
             <path d="M17.5 15A6 6 0 0 1 7 17.4L4 13" />
           </svg>
         </button>
-        <button class="icon-button" type="button" data-quick="transfer" aria-label="Cambiar turno">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M7 7h13" />
-            <path d="m16 3 4 4-4 4" />
-            <path d="M17 17H4" />
-            <path d="m8 13-4 4 4 4" />
-          </svg>
-        </button>
         <button class="user-menu has-menu" type="button" data-menu="usuario">
-          <span id="currentUserName">Andres</span>
+          <span id="currentUserName">Usuario</span>
           <span class="chevron">v</span>
         </button>
       </div>
@@ -205,6 +83,8 @@
         </section>
 
         <nav class="module-grid" aria-label="Opciones principales">
+          <p class="rail-group">Operacion</p>
+
           <button class="module-button is-active" type="button" data-module="clientes">
             <span class="module-icon">
               <svg viewBox="0 0 64 64" aria-hidden="true">
@@ -220,13 +100,43 @@
             </span>
           </button>
 
+          <button class="module-button" type="button" data-module="citas">
+            <span class="module-icon">
+              <svg viewBox="0 0 64 64" aria-hidden="true">
+                <path d="M16 18h32v34H16z" />
+                <path d="M16 27h32" />
+                <path d="M24 12v12" />
+                <path d="M40 12v12" />
+                <path d="M23 36h10" />
+              </svg>
+            </span>
+            <span class="module-label">
+              <strong>Citas</strong>
+              <small>Agenda del salon</small>
+            </span>
+          </button>
+
+          <button class="module-button" type="button" data-module="enCurso">
+            <span class="module-icon">
+              <svg viewBox="0 0 64 64" aria-hidden="true">
+                <circle cx="32" cy="32" r="22" />
+                <path d="M32 18v14l9 6" />
+              </svg>
+            </span>
+            <span class="module-label">
+              <strong>En curso</strong>
+              <small>Sesiones activas</small>
+            </span>
+          </button>
+
+          <p class="rail-group">Catalogo</p>
+
           <button class="module-button" type="button" data-module="inventario">
             <span class="module-icon">
               <svg viewBox="0 0 64 64" aria-hidden="true">
                 <path d="M14 20 32 10l18 10v25L32 55 14 45z" />
                 <path d="M14 20 32 30l18-10" />
                 <path d="M32 30v25" />
-                <path d="M23 15l18 10" />
               </svg>
             </span>
             <span class="module-label">
@@ -241,30 +151,11 @@
                 <path d="M18 46c9-20 24-20 33-30" />
                 <path d="M13 52c12-3 20-12 24-25" />
                 <path d="M43 15l7-3 2 7" />
-                <path d="M18 19h12" />
-                <path d="M16 28h9" />
-                <path d="M40 45h10" />
               </svg>
             </span>
             <span class="module-label">
               <strong>Procedimientos</strong>
               <small>Servicios esteticos</small>
-            </span>
-          </button>
-
-          <button class="module-button" type="button" data-module="enCurso">
-            <span class="module-icon">
-              <svg viewBox="0 0 64 64" aria-hidden="true">
-                <path d="M18 16h28v36H18z" />
-                <path d="M24 12h16v8H24z" />
-                <path d="M25 31h15" />
-                <path d="M25 39h10" />
-                <path d="M43 38l5 5 8-11" />
-              </svg>
-            </span>
-            <span class="module-label">
-              <strong>En curso</strong>
-              <small>Sesiones activas</small>
             </span>
           </button>
 
@@ -275,10 +166,8 @@
                 <path d="M16 26h32" />
                 <path d="M24 10v12" />
                 <path d="M40 10v12" />
-                <path d="M23 36h6" />
-                <path d="M35 36h6" />
-                <path d="M23 45h6" />
-                <path d="M35 45h6" />
+                <path d="M23 36h12" />
+                <path d="M23 45h18" />
               </svg>
             </span>
             <span class="module-label">
@@ -287,32 +176,14 @@
             </span>
           </button>
 
-          <button class="module-button" type="button" data-module="citas">
-            <span class="module-icon">
-              <svg viewBox="0 0 64 64" aria-hidden="true">
-                <path d="M16 18h32v34H16z" />
-                <path d="M16 27h32" />
-                <path d="M24 12v12" />
-                <path d="M40 12v12" />
-                <path d="M24 39l6-6v15" />
-                <path d="M36 34c8 0 8 12 0 12" />
-                <path d="M36 46h8" />
-              </svg>
-            </span>
-            <span class="module-label">
-              <strong>Citas</strong>
-              <small>Agenda del salon</small>
-            </span>
-          </button>
+          <p class="rail-group">Administracion</p>
 
           <button class="module-button" type="button" data-module="facturacion">
             <span class="module-icon">
               <svg viewBox="0 0 64 64" aria-hidden="true">
-                <path d="M18 10h28v44H18z" />
-                <path d="M24 21h16" />
-                <path d="M24 30h16" />
-                <path d="M24 39h8" />
-                <path d="M38 46c0-5 8-5 8 0s-8 3-8 8" />
+                <path d="M18 10h28v44l-7-4-7 4-7-4-7 4z" />
+                <path d="M26 22h12" />
+                <path d="M26 32h12" />
               </svg>
             </span>
             <span class="module-label">
@@ -326,9 +197,8 @@
               <svg viewBox="0 0 64 64" aria-hidden="true">
                 <circle cx="24" cy="23" r="9" />
                 <path d="M10 51c3-12 25-12 28 0" />
-                <path d="M42 21h12" />
-                <path d="M42 31h9" />
-                <path d="M42 41h12" />
+                <path d="M44 21h11" />
+                <path d="M44 31h8" />
               </svg>
             </span>
             <span class="module-label">
@@ -353,13 +223,15 @@
 
         <section class="module-overview" aria-label="Resumen operativo">
           <section class="info-block active-module-card" aria-labelledby="moduleTitle">
-            <div>
-              <p class="eyebrow">Modulo activo</p>
-              <h2 id="moduleTitle">Clientes</h2>
+            <div class="module-headline">
+              <div>
+                <p class="eyebrow">Modulo activo</p>
+                <h2 id="moduleTitle">Clientes</h2>
+                <p id="moduleDescription"></p>
+              </div>
+              <div class="action-row" id="moduleActions"></div>
             </div>
-            <p id="moduleDescription"></p>
             <div class="metric-row" id="moduleMetrics"></div>
-            <div class="action-row" id="moduleActions"></div>
           </section>
 
           <section class="info-block" aria-labelledby="activeTitle">
@@ -399,6 +271,30 @@
       </section>
     </main>
 
+    <div class="drawer-scrim" id="drawerScrim"></div>
+
+    <aside class="drawer" id="drawer" aria-label="Nuevo registro" aria-hidden="true">
+      <div class="drawer-head">
+        <h2 id="drawerTitle">Nuevo registro</h2>
+        <button class="drawer-close" type="button" id="drawerClose" aria-label="Cerrar panel">&times;</button>
+      </div>
+      <div class="drawer-body" id="drawerBody"></div>
+      <div class="drawer-foot">
+        <button class="secondary-action" type="button" id="drawerCancel">Cancelar</button>
+        <button class="primary-action" type="button" id="drawerSubmit">Guardar</button>
+      </div>
+    </aside>
+
+    <div class="photo-viewer" id="photoViewer" aria-hidden="true">
+      <figure>
+        <img id="photoViewerImage" alt="" />
+        <figcaption>
+          <span id="photoViewerCaption"></span>
+          <button class="secondary-action" type="button" id="photoViewerClose">Cerrar</button>
+        </figcaption>
+      </figure>
+    </div>
+
     <div class="modal-backdrop" id="inventoryReasonModal" aria-hidden="true">
       <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="reasonModalTitle">
         <form class="data-form" id="inventoryReasonForm" autocomplete="off">
@@ -407,7 +303,7 @@
               <p class="eyebrow">Salida de inventario</p>
               <h2 id="reasonModalTitle">Motivo</h2>
             </div>
-            <button class="modal-close" type="button" id="reasonCancelButton" aria-label="Cerrar">x</button>
+            <button class="modal-close" type="button" id="reasonCancelButton" aria-label="Cerrar">&times;</button>
           </div>
 
           <p class="modal-product" id="reasonProductName"></p>

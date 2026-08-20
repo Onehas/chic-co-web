@@ -29,6 +29,7 @@ function baseState() {
     appointments: [],
     invoices: [],
     stockMovements: [],
+    locations: [{ id: "UBI-001", name: "Bodega principal" }],
     users: [
       { id: "USR-000", name: "Gabriel", role: "super", active: true, passwordHash: "super-hash", permissions: allPermissions },
       { id: "USR-003", name: "Paola", role: "recepcion", active: true, passwordHash: "recepcion-hash", permissions }
@@ -42,7 +43,8 @@ function baseState() {
         plans: [],
         appointments: [],
         invoices: [],
-        stockMovements: []
+        stockMovements: [],
+        locations: [{ id: "UBI-001", name: "Bodega principal" }]
       }
     }
   };
@@ -78,5 +80,41 @@ assert.equal(superResult.auditLog[0].action, "state.write");
 
 const publicState = stripSensitiveState(superResult);
 assert.equal(publicState.users.some((user) => "passwordHash" in user), false);
+
+/* --- Ubicaciones del inventario ----------------------------------------- */
+
+// Las ubicaciones son datos de inventario: quien no puede escribir inventario
+// tampoco puede mover productos de estante.
+const placeCurrent = baseState();
+const placeNext = structuredClone(placeCurrent);
+placeNext.locations = [{ id: "UBI-001", name: "Renombrada por recepcion" }];
+placeNext.branches.rohrmoser.locations = placeNext.locations;
+
+const placeResult = applyWritePolicy(placeNext, placeCurrent, { userId: "USR-003" });
+assert.equal(
+  placeResult.locations[0].name,
+  "Bodega principal",
+  "recepcion no puede tocar las ubicaciones del inventario"
+);
+
+// Un super usuario si puede.
+const placeSuper = applyWritePolicy(placeNext, placeCurrent, { userId: "USR-000" });
+assert.equal(placeSuper.locations[0].name, "Renombrada por recepcion", "el super usuario si puede renombrarlas");
+
+// La foto de un producto viaja como referencia, nunca como bytes dentro del
+// estado: el estado completo se envia en cada guardado.
+const photoCurrent = baseState();
+const photoNext = structuredClone(photoCurrent);
+photoNext.products = [{ id: "PRD-1", name: "Producto", stock: 5, imageId: "a".repeat(32), locationId: "UBI-001", spot: "Estante B" }];
+photoNext.branches.rohrmoser.products = photoNext.products;
+
+const photoResult = applyWritePolicy(photoNext, photoCurrent, { userId: "USR-000" });
+assert.equal(photoResult.products[0].imageId.length, 32, "el producto guarda solo el identificador de la foto");
+assert.equal(photoResult.products[0].spot, "Estante B", "guarda el detalle del lugar");
+assert.equal(
+  JSON.stringify(photoResult).includes("data:image"),
+  false,
+  "ninguna imagen viaja embebida en el estado"
+);
 
 console.log("Security policy tests passed");

@@ -92,7 +92,7 @@ const systemUserAuth = {
   },
   "USR-004": {}
 };
-const branchDataKeys = ["clients", "products", "procedures", "activeProcedures", "plans", "appointments", "invoices", "stockMovements"];
+const branchDataKeys = ["clients", "products", "procedures", "activeProcedures", "plans", "appointments", "invoices", "stockMovements", "locations"];
 
 const branchOptions = [
   { id: "rohrmoser", label: "Chic & Co Rohrmoser" },
@@ -149,7 +149,8 @@ function emptyBranchData() {
     plans: [],
     appointments: [],
     invoices: [],
-    stockMovements: []
+    stockMovements: [],
+    locations: []
   };
 }
 
@@ -213,9 +214,10 @@ const moduleConfig = {
   },
   inventario: {
     title: "Inventario",
-    description: "Controla productos, stock minimo, costos, precios y alertas para compras.",
+    description: "Productos, stock minimo, costos y donde esta guardado cada cosa.",
     actions: [
       { label: "Nuevo producto", action: "focusForm" },
+      { label: "Ubicaciones", action: "manageLocations" },
       { label: "Ver alertas", action: "showAlerts" }
     ]
   },
@@ -361,34 +363,52 @@ const elements = {
 };
 
 let pendingStockUseProductId = "";
+let inventoryFilter = "all";
+
+// Deja cualquier estado -del backend, de localStorage o de un respaldo- en la
+// forma que espera la aplicacion: colecciones completas, las dos sucursales
+// reconstruidas y la sucursal activa volcada al nivel superior de `state`.
+// Sin esto, un estado adoptado del backend puede mostrar los datos de la otra
+// sucursal hasta que el usuario la cambia a mano.
+function normalizeStateSnapshot(snapshot) {
+  const parsed = snapshot && typeof snapshot === "object" && !Array.isArray(snapshot) ? snapshot : {};
+  const merged = { ...clone(defaultState), ...parsed };
+
+  branchDataKeys.forEach((key) => {
+    if (!Array.isArray(merged[key])) merged[key] = [];
+  });
+
+  const fallbackBranches = defaultBranches();
+  const savedBranches = parsed.branches || {};
+  const legacyRohrmoserData = pickBranchData(merged);
+  merged.branches = branchOptions.reduce((branches, branch) => {
+    const fallback = branch.id === "rohrmoser" && !parsed.branches ? legacyRohrmoserData : fallbackBranches[branch.id];
+    branches[branch.id] = normalizeBranchData(savedBranches[branch.id], fallback);
+    return branches;
+  }, {});
+
+  merged.currentBranchId = branchOptions.some((branch) => branch.id === merged.currentBranchId)
+    ? merged.currentBranchId
+    : "rohrmoser";
+  writeBranchData(merged, merged.branches[merged.currentBranchId]);
+
+  merged.users =
+    Array.isArray(merged.users) && merged.users.length
+      ? ensureSystemUsers(merged.users.map(normalizeUser))
+      : ensureSystemUsers(clone(defaultState.users).map(normalizeUser));
+  merged.currentUserId = merged.currentUserId || defaultState.currentUserId;
+  if (!merged.users.some((user) => user.id === merged.currentUserId && user.active)) {
+    merged.currentUserId = merged.users.find((user) => user.active)?.id || defaultState.currentUserId;
+  }
+
+  return merged;
+}
 
 function loadState() {
   try {
     const saved = localStorage.getItem(storageKey);
     if (!saved) return createInitialState();
-    const parsed = JSON.parse(saved);
-    const merged = { ...clone(defaultState), ...parsed };
-    merged.stockMovements = merged.stockMovements || [];
-    merged.invoices = merged.invoices || clone(defaultState.invoices);
-    const fallbackBranches = defaultBranches();
-    const savedBranches = parsed.branches || {};
-    const legacyRohrmoserData = pickBranchData(merged);
-    merged.branches = branchOptions.reduce((branches, branch) => {
-      const fallback = branch.id === "rohrmoser" && !parsed.branches ? legacyRohrmoserData : fallbackBranches[branch.id];
-      branches[branch.id] = normalizeBranchData(savedBranches[branch.id], fallback);
-      return branches;
-    }, {});
-    merged.currentBranchId = branchOptions.some((branch) => branch.id === merged.currentBranchId) ? merged.currentBranchId : "rohrmoser";
-    writeBranchData(merged, merged.branches[merged.currentBranchId]);
-    merged.users =
-      Array.isArray(merged.users) && merged.users.length
-        ? ensureSystemUsers(merged.users.map(normalizeUser))
-        : ensureSystemUsers(clone(defaultState.users).map(normalizeUser));
-    merged.currentUserId = merged.currentUserId || defaultState.currentUserId;
-    if (!merged.users.some((user) => user.id === merged.currentUserId && user.active)) {
-      merged.currentUserId = merged.users.find((user) => user.active)?.id || defaultState.currentUserId;
-    }
-    return merged;
+    return normalizeStateSnapshot(JSON.parse(saved));
   } catch (error) {
     return createInitialState();
   }
@@ -413,14 +433,29 @@ function normalizeUser(user) {
   };
 }
 
+// Garantiza que existan las cinco cuentas autorizadas y que el super usuario
+// siga siendo super y activo. La identidad guardada (correo y nombre) manda
+// sobre la plantilla local: de lo contrario cada guardado borraria el correo
+// que el servidor tiene registrado para esa cuenta.
 function ensureSystemUsers(users) {
-  const normalizedSuperUser = normalizeUser(superUserAccount);
   const usersById = new Map(
     users
       .filter((user) => allowedUserIds.includes(user.id))
       .map((user) => [user.id, normalizeUser(user)])
   );
-  usersById.set(normalizedSuperUser.id, normalizedSuperUser);
+
+  const savedSuperUser = usersById.get(superUserAccount.id);
+  usersById.set(
+    superUserAccount.id,
+    normalizeUser({
+      ...superUserAccount,
+      ...(savedSuperUser || {}),
+      role: "super",
+      active: true,
+      permissions: rolePresets.super.permissions
+    })
+  );
+
   return allowedUserIds.map((userId) => usersById.get(userId) || normalizeUser(defaultState.users.find((user) => user.id === userId))).filter(Boolean);
 }
 
@@ -797,7 +832,9 @@ function setModule(moduleName, options = {}) {
 
   if (!options.silent) {
     showToast(`${moduleConfig[moduleName].title} listo`);
-    elements.operationsPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+    // Antes se hacía scrollIntoView del panel, lo que dejaba el título del
+    // módulo debajo de la barra superior fija. Ahora la vista cabe entera.
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 }
 
@@ -943,37 +980,38 @@ function renderView() {
   const config = moduleConfig[currentModule];
   const search = elements.searchInput.value;
 
-  elements.viewEyebrow.textContent = "Gestion";
-  elements.viewTitle.textContent = config.title;
-  elements.viewSubtitle.textContent = config.description;
+  // El título y la descripción del módulo ya están en la cabecera de arriba.
+  // Estos nodos se dejan vacíos —y el CSS los colapsa— pero deben existir:
+  // el módulo Hacienda escribe en ellos.
+  elements.viewEyebrow.textContent = "";
+  elements.viewTitle.textContent = "";
+  elements.viewSubtitle.textContent = "";
   elements.viewContent.innerHTML = viewRenderers[currentModule]?.(search) || `<div class="empty-state">Modulo no disponible.</div>`;
+
+  // Debe seguir siendo síncrono: production-tools.js y enhancements.js leen
+  // #viewContent justo después de que esta función retorne.
+  moveFormToDrawer();
+  hydrateProductImages(elements.viewContent);
 }
 
-function renderStats(stats) {
-  return `
-    <div class="stat-strip">
-      ${stats
-        .map(
-          ([value, label]) => `
-            <article class="stat-card">
-              <strong>${escapeHtml(value)}</strong>
-              <span>${escapeHtml(label)}</span>
-            </article>
-          `
-        )
-        .join("")}
-    </div>
-  `;
+// Las cifras del módulo ya viven en la cabecera; repetirlas encima de la
+// tabla solo gastaba altura. Se conserva la función porque forma parte de la
+// firma de renderLayout.
+function renderStats() {
+  return "";
 }
 
+// La rejilla mantiene .view-grid > (.form-panel, .records-panel) porque
+// production-tools.js y enhancements.js se anclan justamente ahí. El
+// formulario se traslada al panel lateral después de renderizar; ver
+// moveFormToDrawer().
 function renderLayout(stats, formTitle, formHtml, recordsTitle, recordsHtml) {
   const writableForm = canWrite(currentModule)
     ? formHtml
     : `<div class="empty-state">Este usuario puede consultar este modulo, pero no puede crear ni modificar datos.</div>`;
   return `
-    ${renderStats(stats)}
     <div class="view-grid">
-      <section class="form-panel">
+      <section class="form-panel" data-form-title="${escapeHtml(formTitle)}">
         <h3>${escapeHtml(formTitle)}</h3>
         ${writableForm}
       </section>
@@ -1289,38 +1327,120 @@ const viewRenderers = {
   },
 
   inventario(search) {
-    const rows = state.products
-      .filter((product) => {
-        const isLow = Number(product.stock) <= Number(product.min);
-        return matchesSearch([product.name, product.category, product.supplier, product.unit, isLow ? "stock bajo alerta" : "ok"], search);
-      })
+    if (ensureLocations()) storeStateLocally();
+
+    const filter = inventoryFilter;
+    const all = state.products;
+    const lowCount = all.filter(isLowStock).length;
+    const unplacedCount = all.filter((product) => !product.locationId).length;
+
+    const matchesFilter = (product) => {
+      if (filter === "low") return isLowStock(product);
+      if (filter === "unplaced") return !product.locationId;
+      if (filter.startsWith("loc:")) return String(product.locationId || "") === filter.slice(4);
+      return true;
+    };
+
+    const rows = all
+      .filter(matchesFilter)
+      .filter((product) =>
+        matchesSearch(
+          [product.name, product.category, product.supplier, product.unit, locationName(product.locationId), product.spot, isLowStock(product) ? "stock bajo alerta reponer" : "ok"],
+          search
+        )
+      )
       .map((product) => {
-        const isLow = Number(product.stock) <= Number(product.min);
+        const low = isLowStock(product);
+        const place = product.locationId
+          ? `<span class="location-name"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s7-5.4 7-11a7 7 0 1 0-14 0c0 5.6 7 11 7 11z" /><circle cx="12" cy="10" r="2.6" /></svg>${escapeHtml(locationName(product.locationId))}</span>${
+              product.spot ? `<span class="location-spot">${escapeHtml(product.spot)}</span>` : ""
+            }`
+          : `<span class="location-none">Sin ubicacion</span>`;
+
         return `
           <tr>
             <td>
-              <div class="cell-title">
-                <strong>${escapeHtml(product.name)}</strong>
-                <span>${escapeHtml(product.id)} | ${escapeHtml(product.category)}</span>
+              <div class="product-cell">
+                ${productPhotoCell(product)}
+                <div class="cell-title">
+                  <strong>${escapeHtml(product.name)}</strong>
+                  <span>${escapeHtml(product.id)} | ${escapeHtml(product.category)}</span>
+                </div>
               </div>
             </td>
-            <td>${escapeHtml(product.stock)} ${escapeHtml(product.unit)}<br />Minimo ${escapeHtml(product.min)}</td>
-            <td>${isLow ? statusBadge("Stock bajo") : statusBadge("OK")}</td>
-            <td>${money(product.cost)}<br />Venta ${money(product.price)}</td>
-            <td>${escapeHtml(product.supplier)}</td>
+            <td>${low ? statusBadge("Reponer") : statusBadge("En rango")}</td>
+            <td class="num"><strong>${escapeHtml(product.stock)}</strong> <span class="muted-cell">${escapeHtml(product.unit)}</span></td>
+            <td class="num muted-cell">${escapeHtml(product.min)}</td>
+            <td><div class="location-cell">${place}</div></td>
+            <td class="num">${money(product.cost)}</td>
+            <td>${escapeHtml(product.supplier || "-")}</td>
             <td>
               <div class="inline-actions">
                 <button class="row-action" type="button" data-stock-add="${product.id}">Entrada +1</button>
                 <button class="row-action is-muted" type="button" data-stock-use="${product.id}">Usar -1</button>
+                <button class="row-action is-muted" type="button" data-product-place="${product.id}">Ubicar</button>
               </div>
             </td>
           </tr>
         `;
       });
 
+    const chip = (value, label, count, tone = "") =>
+      `<button class="filter-chip ${filter === value ? "is-active" : ""}" type="button" data-inventory-filter="${escapeHtml(value)}">${escapeHtml(label)}${
+        count === null ? "" : ` <b class="${tone}">${escapeHtml(count)}</b>`
+      }</button>`;
+
+    const filters = `
+      <div class="filter-bar">
+        ${chip("all", "Todos", all.length)}
+        ${chip("low", "Bajo minimo", lowCount)}
+        ${chip("unplaced", "Sin ubicacion", unplacedCount)}
+        ${locationList()
+          .map((location) => chip(`loc:${location.id}`, location.name, productsAtLocation(location.id).length))
+          .join("")}
+      </div>
+    `;
+
+    const board = locationList().length
+      ? `
+        <div class="location-board">
+          ${locationList()
+            .map((location) => {
+              const items = productsAtLocation(location.id);
+              const low = items.filter(isLowStock);
+              return `
+                <article class="location-card">
+                  <div class="location-card-head">
+                    <strong>${escapeHtml(location.name)}</strong>
+                    <span>${escapeHtml(items.length)} productos</span>
+                  </div>
+                  <div class="location-chips">
+                    ${
+                      items.length
+                        ? items
+                            .slice(0, 6)
+                            .map(
+                              (product) =>
+                                `<span class="location-chip ${isLowStock(product) ? "is-low" : ""}">${escapeHtml(product.name)}</span>`
+                            )
+                            .join("")
+                        : `<span class="location-empty">Sin productos asignados</span>`
+                    }
+                    ${items.length > 6 ? `<span class="location-chip">+${escapeHtml(items.length - 6)}</span>` : ""}
+                  </div>
+                  ${low.length ? `<span class="location-empty">${escapeHtml(low.length)} por reponer</span>` : ""}
+                </article>
+              `;
+            })
+            .join("")}
+        </div>
+      `
+      : "";
+
     const form = `
       <form class="data-form" data-form="product" autocomplete="off">
         <div class="form-grid">
+          ${photoField()}
           ${inputField("Producto", "name", "text", "", "required")}
           ${selectField("Categoria", "category", [
             { value: "Quimicos", label: "Quimicos" },
@@ -1332,6 +1452,8 @@ const viewRenderers = {
           ${inputField("Stock", "stock", "number", "1", "min='0' required")}
           ${inputField("Minimo", "min", "number", "1", "min='0' required")}
           ${inputField("Unidad", "unit", "text", "unidades", "required")}
+          ${selectField("Ubicacion", "locationId", locationOptions(prefill.locationId || ""), prefill.locationId || "")}
+          ${inputField("Detalle del lugar", "spot", "text", "", "placeholder='Estante B, nivel 2'")}
           ${inputField("Costo", "cost", "number", "0", "min='0' step='100'")}
           ${inputField("Precio venta", "price", "number", "0", "min='0' step='100'")}
           ${inputField("Proveedor", "supplier", "text")}
@@ -1345,7 +1467,10 @@ const viewRenderers = {
       "Nuevo producto",
       form,
       "Productos y stock",
-      renderTable(["Producto", "Stock", "Estado", "Costo/venta", "Proveedor", "Acciones"], rows)
+      `${filters}${renderTable(
+        ["Producto", "Estado", "Stock", "Minimo", "Ubicacion", "Costo", "Proveedor", "Acciones"],
+        rows
+      )}${board}`
     );
   },
 
@@ -1741,6 +1866,314 @@ const viewRenderers = {
   }
 };
 
+/* =====================================================================
+   Panel lateral de creación
+   ---------------------------------------------------------------------
+   El formulario de alta se creaba en línea y ocupaba media pantalla de
+   forma permanente, aunque se use una vez al día. Sigue generándose en el
+   marcado del módulo —production-tools.js y enhancements.js se anclan a
+   .view-grid y .records-panel— pero se traslada al panel lateral, que solo
+   se abre cuando hace falta.
+   ===================================================================== */
+
+const drawerElements = {
+  root: document.querySelector("#drawer"),
+  scrim: document.querySelector("#drawerScrim"),
+  title: document.querySelector("#drawerTitle"),
+  body: document.querySelector("#drawerBody"),
+  close: document.querySelector("#drawerClose"),
+  cancel: document.querySelector("#drawerCancel"),
+  submit: document.querySelector("#drawerSubmit")
+};
+
+let drawerReturnFocus = null;
+
+// Mueve el .form-panel recién renderizado dentro del panel lateral.
+function moveFormToDrawer() {
+  if (!drawerElements.body) return;
+  const panel = elements.viewContent?.querySelector(".view-grid > .form-panel");
+  if (!panel) return;
+  drawerElements.body.replaceChildren(panel);
+  if (drawerElements.title) {
+    drawerElements.title.textContent = panel.dataset.formTitle || "Nuevo registro";
+  }
+  const hasForm = Boolean(panel.querySelector(".data-form"));
+  if (drawerElements.submit) drawerElements.submit.hidden = !hasForm;
+}
+
+function openDrawer() {
+  if (!drawerElements.root) return;
+  if (!drawerElements.body?.querySelector(".data-form")) {
+    showToast("Este usuario no puede crear registros en este modulo");
+    return;
+  }
+  drawerReturnFocus = document.activeElement;
+  document.body.classList.add("drawer-open");
+  drawerElements.root.setAttribute("aria-hidden", "false");
+  window.setTimeout(() => {
+    drawerElements.body?.querySelector("input, select, textarea")?.focus();
+  }, 220);
+}
+
+function closeDrawer() {
+  if (!document.body.classList.contains("drawer-open")) return;
+  document.body.classList.remove("drawer-open");
+  drawerElements.root?.setAttribute("aria-hidden", "true");
+  if (drawerReturnFocus instanceof HTMLElement) drawerReturnFocus.focus();
+  drawerReturnFocus = null;
+}
+
+function submitDrawerForm() {
+  const form = drawerElements.body?.querySelector(".data-form");
+  if (!form) return;
+  if (typeof form.requestSubmit === "function") form.requestSubmit();
+  else form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+}
+
+/* =====================================================================
+   Ubicaciones físicas del inventario
+   ---------------------------------------------------------------------
+   Saber que quedan dos peróxidos no sirve si nadie sabe en qué estante
+   están. Las ubicaciones son datos de sucursal: un estante de Rohrmoser
+   no existe en Alajuela.
+   ===================================================================== */
+
+const defaultLocationNames = ["Bodega principal", "Recepcion", "Sala 1", "Sala 2", "Vitrina"];
+
+function locationList() {
+  return Array.isArray(state.locations) ? state.locations : [];
+}
+
+// Siembra las ubicaciones habituales la primera vez que se abre inventario.
+// Se hace aunque todavía no haya productos: si no, al primer producto no se le
+// podría asignar ubicación porque la lista estaría vacía.
+function ensureLocations() {
+  if (!Array.isArray(state.locations)) state.locations = [];
+  if (state.locations.length) return false;
+  state.locations = defaultLocationNames.map((name, index) => ({
+    id: `UBI-${String(index + 1).padStart(3, "0")}`,
+    name
+  }));
+  return true;
+}
+
+function locationById(id) {
+  return locationList().find((location) => location.id === id) || null;
+}
+
+function locationName(id) {
+  return locationById(id)?.name || "";
+}
+
+function locationOptions(selected = "") {
+  return [
+    { value: "", label: "Sin ubicacion asignada" },
+    ...locationList().map((location) => ({
+      value: location.id,
+      label: location.name,
+      selected: location.id === selected
+    }))
+  ];
+}
+
+function productsAtLocation(locationId) {
+  return state.products.filter((product) => String(product.locationId || "") === String(locationId));
+}
+
+function isLowStock(product) {
+  return Number(product.stock) <= Number(product.min);
+}
+
+/* =====================================================================
+   Fotos de producto
+   ---------------------------------------------------------------------
+   Las imágenes no viajan dentro de `state`: el estado completo se envía en
+   cada guardado con un tope de 2 MB, y una docena de fotos en base64 lo
+   reventaría. `state` solo guarda el identificador; los bytes viven en
+   /api/media.
+   ===================================================================== */
+
+const imageObjectUrls = new Map();
+const imageRequests = new Map();
+const maxImageSide = 1000;
+
+function mediaToken() {
+  try {
+    return sessionStorage.getItem("salonSuiteBackendToken") || apiSessionToken() || "";
+  } catch (error) {
+    return apiSessionToken() || "";
+  }
+}
+
+function mediaPath(imageId) {
+  return `api/media/${encodeURIComponent(imageId)}`;
+}
+
+// Descarga la imagen con la sesión activa y la deja como blob URL. Un
+// <img src> no puede enviar la cabecera Authorization, así que se busca
+// aparte y se cachea por identificador.
+function loadProductImage(imageId) {
+  if (!imageId) return Promise.resolve("");
+  if (imageObjectUrls.has(imageId)) return Promise.resolve(imageObjectUrls.get(imageId));
+  if (imageRequests.has(imageId)) return imageRequests.get(imageId);
+
+  const token = mediaToken();
+  const request = fetch(mediaPath(imageId), {
+    headers: token ? { Authorization: `Bearer ${token}` } : {}
+  })
+    .then((response) => (response.ok ? response.blob() : null))
+    .then((blob) => {
+      if (!blob) return "";
+      const url = URL.createObjectURL(blob);
+      imageObjectUrls.set(imageId, url);
+      return url;
+    })
+    .catch(() => "")
+    .finally(() => imageRequests.delete(imageId));
+
+  imageRequests.set(imageId, request);
+  return request;
+}
+
+// Rellena los <img data-image-id> que el render dejó vacíos.
+function hydrateProductImages(root = document) {
+  root.querySelectorAll("img[data-image-id]:not([src])").forEach((image) => {
+    const imageId = image.dataset.imageId;
+    loadProductImage(imageId).then((url) => {
+      if (url && image.isConnected) image.src = url;
+      else if (!url) image.closest(".product-photo, .photo-preview")?.classList.add("is-missing");
+    });
+  });
+}
+
+function forgetProductImage(imageId) {
+  const url = imageObjectUrls.get(imageId);
+  if (url) URL.revokeObjectURL(url);
+  imageObjectUrls.delete(imageId);
+}
+
+function photoPlaceholder() {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2" /><circle cx="8.5" cy="10" r="1.6" /><path d="m4 17 5-4.5 4 3.5 3-2.5 4 3.5" /></svg>`;
+}
+
+function productPhotoCell(product) {
+  if (!product.imageId) {
+    return `<span class="product-photo" aria-hidden="true">${photoPlaceholder()}</span>`;
+  }
+  return `<button class="product-photo is-clickable" type="button" data-photo-open="${escapeHtml(product.imageId)}" data-photo-name="${escapeHtml(product.name)}" aria-label="Ver foto de ${escapeHtml(product.name)}"><img data-image-id="${escapeHtml(product.imageId)}" alt="" /></button>`;
+}
+
+// Reduce la foto antes de subirla. Un teléfono moderno produce archivos de
+// 4 MB; aquí salen entre 60 y 200 KB, que es lo que admite el almacén.
+async function downscaleImage(file) {
+  const source = await loadBitmap(file);
+  const width = source.width;
+  const height = source.height;
+  const scale = Math.min(1, maxImageSide / Math.max(width, height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(width * scale));
+  canvas.height = Math.max(1, Math.round(height * scale));
+  const context = canvas.getContext("2d");
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(source, 0, 0, canvas.width, canvas.height);
+  if (typeof source.close === "function") source.close();
+  return canvas.toDataURL("image/jpeg", 0.82);
+}
+
+function loadBitmap(file) {
+  if (typeof createImageBitmap === "function") {
+    return createImageBitmap(file).catch(() => loadImageElement(file));
+  }
+  return loadImageElement(file);
+}
+
+function loadImageElement(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("No se pudo leer la imagen"));
+    };
+    image.src = url;
+  });
+}
+
+async function uploadProductPhoto(file, ownerId = "") {
+  if (!file) return "";
+  if (!/^image\//i.test(file.type)) {
+    throw new Error("Ese archivo no es una imagen");
+  }
+  if (typeof backendRequest !== "function") {
+    throw new Error("Sin conexion con el servidor");
+  }
+  const dataUrl = await downscaleImage(file);
+  const response = await backendRequest("/media", {
+    method: "POST",
+    body: JSON.stringify({
+      dataUrl,
+      branchId: state.currentBranchId || "",
+      ownerId
+    })
+  });
+  return response?.image?.id || "";
+}
+
+// Campo de foto para el formulario de producto. El identificador viaja en un
+// input oculto para que FormData lo recoja como un campo más.
+function photoField(imageId = "") {
+  return `
+    <div class="photo-field" data-photo-field>
+      <span class="photo-field-label">Foto del producto</span>
+      <div class="photo-drop" data-photo-drop>
+        <span class="photo-preview">${
+          imageId ? `<img data-image-id="${escapeHtml(imageId)}" alt="" />` : photoPlaceholder()
+        }</span>
+        <div class="photo-actions">
+          <div class="inline-actions">
+            <button class="row-action" type="button" data-photo-pick>Subir foto</button>
+            <button class="row-action is-muted" type="button" data-photo-clear${imageId ? "" : " hidden"}>Quitar</button>
+          </div>
+          <span class="photo-hint" data-photo-hint>JPG, PNG o WebP. Se reduce sola antes de subir.</span>
+        </div>
+      </div>
+      <input type="file" accept="image/jpeg,image/png,image/webp" data-photo-input hidden />
+      <input type="hidden" name="imageId" value="${escapeHtml(imageId)}" />
+    </div>
+  `;
+}
+
+/* Visor de foto a tamaño grande */
+
+const photoViewer = {
+  root: document.querySelector("#photoViewer"),
+  image: document.querySelector("#photoViewerImage"),
+  caption: document.querySelector("#photoViewerCaption"),
+  close: document.querySelector("#photoViewerClose")
+};
+
+function openPhotoViewer(imageId, name) {
+  if (!photoViewer.root) return;
+  photoViewer.caption.textContent = name || "Foto del producto";
+  photoViewer.image.removeAttribute("src");
+  photoViewer.image.alt = name ? `Foto de ${name}` : "Foto del producto";
+  photoViewer.root.classList.add("is-open");
+  photoViewer.root.setAttribute("aria-hidden", "false");
+  loadProductImage(imageId).then((url) => {
+    if (url) photoViewer.image.src = url;
+  });
+}
+
+function closePhotoViewer() {
+  photoViewer.root?.classList.remove("is-open");
+  photoViewer.root?.setAttribute("aria-hidden", "true");
+}
+
 function handleSubmit(event) {
   if (event.target === elements.loginForm) {
     event.preventDefault();
@@ -1797,7 +2230,10 @@ function addProduct(data) {
     unit: data.unit.trim(),
     cost: Number(data.cost || 0),
     price: Number(data.price || 0),
-    supplier: data.supplier.trim()
+    supplier: data.supplier.trim(),
+    imageId: String(data.imageId || "").trim(),
+    locationId: String(data.locationId || "").trim(),
+    spot: String(data.spot || "").trim()
   });
   persistAndRender("Producto guardado");
 }
@@ -1938,6 +2374,7 @@ function addUser(data) {
 
 function persistAndRender(message) {
   saveState();
+  closeDrawer();
   renderAll();
   showToast(message);
 }
@@ -2027,8 +2464,13 @@ function handleSideAction(button) {
 
   if (button.dataset.sideAction === "focusForm") {
     if (!requireWrite(currentModule)) return;
-    elements.operationsPanel.scrollIntoView({ behavior: "smooth", block: "start" });
-    setTimeout(() => document.querySelector(".data-form input, .data-form select, .data-form textarea")?.focus(), 250);
+    openDrawer();
+    return;
+  }
+
+  if (button.dataset.sideAction === "manageLocations") {
+    if (!requireWrite("inventario")) return;
+    openLocationsDrawer();
     return;
   }
 
@@ -2448,6 +2890,226 @@ document.addEventListener("keydown", (event) => {
     closeDropdown();
     closeStockReasonModal();
   }
+});
+
+/* =====================================================================
+   Interacción de inventario, panel lateral y fotos
+   ===================================================================== */
+
+// Panel lateral para colocar un producto ya existente en su sitio.
+function openPlaceDrawer(productId) {
+  const product = state.products.find((item) => item.id === productId);
+  if (!product || !drawerElements.body) return;
+
+  drawerElements.title.textContent = `Ubicar ${product.name}`;
+  drawerElements.body.innerHTML = `
+    <div class="drawer-inline" data-place-form data-product-id="${escapeHtml(product.id)}">
+      <div class="form-grid">
+        ${selectField("Ubicacion", "locationId", locationOptions(product.locationId || ""), product.locationId || "")}
+        ${inputField("Detalle del lugar", "spot", "text", product.spot || "", "placeholder='Estante B, nivel 2'")}
+      </div>
+      <p class="photo-hint">Stock actual: ${escapeHtml(product.stock)} ${escapeHtml(product.unit)}</p>
+    </div>
+  `;
+  drawerElements.submit.hidden = false;
+  drawerReturnFocus = document.activeElement;
+  document.body.classList.add("drawer-open");
+  drawerElements.root.setAttribute("aria-hidden", "false");
+  window.setTimeout(() => drawerElements.body.querySelector("select")?.focus(), 220);
+}
+
+function savePlaceDrawer() {
+  const panel = drawerElements.body?.querySelector("[data-place-form]");
+  if (!panel) return false;
+  const product = state.products.find((item) => item.id === panel.dataset.productId);
+  if (!product) return false;
+
+  product.locationId = panel.querySelector('[name="locationId"]')?.value || "";
+  product.spot = (panel.querySelector('[name="spot"]')?.value || "").trim();
+  persistAndRender(product.locationId ? `Ubicado en ${locationName(product.locationId)}` : "Ubicacion retirada");
+  return true;
+}
+
+// Panel lateral para administrar la lista de ubicaciones de la sucursal.
+function openLocationsDrawer() {
+  if (!drawerElements.body) return;
+  ensureLocations();
+
+  drawerElements.title.textContent = "Ubicaciones de la sucursal";
+  drawerElements.body.innerHTML = `
+    <div class="drawer-inline" data-locations-form>
+      <div class="location-editor">
+        ${
+          locationList().length
+            ? locationList()
+                .map(
+                  (location) => `
+                    <div class="location-row" data-location-id="${escapeHtml(location.id)}">
+                      <input type="text" value="${escapeHtml(location.name)}" data-location-name aria-label="Nombre de la ubicacion" />
+                      <span class="location-count">${escapeHtml(productsAtLocation(location.id).length)}</span>
+                      <button class="row-action is-warning" type="button" data-location-remove="${escapeHtml(location.id)}" aria-label="Eliminar ${escapeHtml(location.name)}">Quitar</button>
+                    </div>
+                  `
+                )
+                .join("")
+            : `<div class="empty-state">Todavia no hay ubicaciones.</div>`
+        }
+      </div>
+      <label class="field">
+        <span>Agregar ubicacion</span>
+        <input type="text" data-location-new placeholder="Bodega, Sala 3, Vitrina..." />
+      </label>
+      <p class="photo-hint">Al quitar una ubicacion, los productos que estaban ahi quedan sin ubicacion asignada.</p>
+    </div>
+  `;
+  drawerElements.submit.hidden = false;
+  drawerReturnFocus = document.activeElement;
+  document.body.classList.add("drawer-open");
+  drawerElements.root.setAttribute("aria-hidden", "false");
+}
+
+function saveLocationsDrawer() {
+  const panel = drawerElements.body?.querySelector("[data-locations-form]");
+  if (!panel) return false;
+
+  panel.querySelectorAll(".location-row").forEach((row) => {
+    const location = locationById(row.dataset.locationId);
+    const name = (row.querySelector("[data-location-name]")?.value || "").trim();
+    if (location && name) location.name = name;
+  });
+
+  const fresh = (panel.querySelector("[data-location-new]")?.value || "").trim();
+  if (fresh) {
+    state.locations = locationList().concat({ id: nextId("UBI", locationList()), name: fresh });
+  }
+
+  persistAndRender("Ubicaciones actualizadas");
+  return true;
+}
+
+function removeLocation(locationId) {
+  if (locationList().length <= 1) {
+    showToast("Debe quedar al menos una ubicacion");
+    return;
+  }
+  state.locations = locationList().filter((location) => location.id !== locationId);
+  state.products.forEach((product) => {
+    if (product.locationId === locationId) product.locationId = "";
+  });
+  saveState();
+  renderAll();
+  openLocationsDrawer();
+  showToast("Ubicacion eliminada");
+}
+
+// Sube la foto elegida y refleja el resultado en el propio campo.
+async function handlePhotoSelection(input) {
+  const field = input.closest("[data-photo-field]");
+  const file = input.files?.[0];
+  input.value = "";
+  if (!field || !file) return;
+
+  const hint = field.querySelector("[data-photo-hint]");
+  const preview = field.querySelector(".photo-preview");
+  const hidden = field.querySelector('input[name="imageId"]');
+  const clear = field.querySelector("[data-photo-clear]");
+
+  hint.classList.remove("is-error");
+  hint.textContent = "Subiendo foto...";
+
+  try {
+    const imageId = await uploadProductPhoto(file, hidden?.value || "");
+    if (!imageId) throw new Error("El servidor no devolvio la imagen");
+    hidden.value = imageId;
+    preview.innerHTML = `<img data-image-id="${escapeHtml(imageId)}" alt="" />`;
+    hydrateProductImages(field);
+    clear?.removeAttribute("hidden");
+    hint.textContent = "Foto lista.";
+  } catch (error) {
+    hint.classList.add("is-error");
+    hint.textContent = error.message || "No se pudo subir la foto";
+  }
+}
+
+function clearPhotoField(field) {
+  const hidden = field.querySelector('input[name="imageId"]');
+  const preview = field.querySelector(".photo-preview");
+  const hint = field.querySelector("[data-photo-hint]");
+  if (hidden?.value) forgetProductImage(hidden.value);
+  if (hidden) hidden.value = "";
+  if (preview) preview.innerHTML = photoPlaceholder();
+  field.querySelector("[data-photo-clear]")?.setAttribute("hidden", "");
+  if (hint) {
+    hint.classList.remove("is-error");
+    hint.textContent = "JPG, PNG o WebP. Se reduce sola antes de subir.";
+  }
+}
+
+document.addEventListener("click", (event) => {
+  const filterChip = event.target.closest("[data-inventory-filter]");
+  if (filterChip) {
+    inventoryFilter = filterChip.dataset.inventoryFilter;
+    renderView();
+    return;
+  }
+
+  if (event.target.closest("[data-product-place]")) {
+    if (!requireWrite("inventario")) return;
+    openPlaceDrawer(event.target.closest("[data-product-place]").dataset.productPlace);
+    return;
+  }
+
+  const photoOpen = event.target.closest("[data-photo-open]");
+  if (photoOpen) {
+    openPhotoViewer(photoOpen.dataset.photoOpen, photoOpen.dataset.photoName);
+    return;
+  }
+
+  if (event.target.closest("[data-photo-pick]")) {
+    event.target.closest("[data-photo-field]")?.querySelector("[data-photo-input]")?.click();
+    return;
+  }
+
+  const photoClear = event.target.closest("[data-photo-clear]");
+  if (photoClear) {
+    clearPhotoField(photoClear.closest("[data-photo-field]"));
+    return;
+  }
+
+  const locationRemove = event.target.closest("[data-location-remove]");
+  if (locationRemove) {
+    removeLocation(locationRemove.dataset.locationRemove);
+    return;
+  }
+
+  if (event.target === photoViewer.root || event.target.closest("#photoViewerClose")) {
+    closePhotoViewer();
+    return;
+  }
+
+  if (event.target === drawerElements.scrim || event.target.closest("#drawerClose") || event.target.closest("#drawerCancel")) {
+    closeDrawer();
+    return;
+  }
+
+  if (event.target.closest("#drawerSubmit")) {
+    if (savePlaceDrawer() || saveLocationsDrawer()) return;
+    submitDrawerForm();
+  }
+});
+
+document.addEventListener("change", (event) => {
+  const photoInput = event.target.closest("[data-photo-input]");
+  if (photoInput) handlePhotoSelection(photoInput);
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  if (photoViewer.root?.classList.contains("is-open")) {
+    closePhotoViewer();
+    return;
+  }
+  closeDrawer();
 });
 
 restoreSession();

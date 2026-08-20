@@ -3,17 +3,19 @@
 const path = require("path");
 const crypto = require("crypto");
 const { promises: fs } = require("fs");
-const { server } = require("./server");
+const core = require("./server");
+const shared = require("./hacienda-shared");
+
+const { server } = core;
 
 const rootDir = path.resolve(__dirname, "..");
 const dataDir = path.join(__dirname, "data");
 const settingsPath = path.join(dataDir, "hacienda-settings.json");
 const port = Number(process.env.PORT || 4173);
 const host = process.env.HOST || "127.0.0.1";
-const databaseUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL || "";
+const databaseUrl = shared.databaseUrl;
 const maxP12Bytes = 1024 * 1024;
-let pgPool = null;
-let pgReady = false;
+const { branchId, pool, readJson } = shared;
 
 const endpoints = {
   Sandbox: {
@@ -66,27 +68,6 @@ function sendJson(res, statusCode, payload) {
   res.end(body);
 }
 
-async function readBody(req) {
-  return new Promise((resolve, reject) => {
-    let body = "";
-    req.setEncoding("utf8");
-    req.on("data", (chunk) => {
-      body += chunk;
-      if (Buffer.byteLength(body) > 2 * 1024 * 1024) {
-        reject(new Error("REQUEST_TOO_LARGE"));
-        req.destroy();
-      }
-    });
-    req.on("end", () => resolve(body));
-    req.on("error", reject);
-  });
-}
-
-async function readJson(req) {
-  const body = await readBody(req);
-  return body ? JSON.parse(body) : {};
-}
-
 function encryptionSecret() {
   return String(process.env.HACIENDA_SECRET_KEY || process.env.HACIENDA_ENCRYPTION_KEY || "");
 }
@@ -109,16 +90,6 @@ function encryptSecret(value) {
   const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
   const encrypted = Buffer.concat([cipher.update(text, "utf8"), cipher.final()]);
   return `v1:${iv.toString("base64url")}:${cipher.getAuthTag().toString("base64url")}:${encrypted.toString("base64url")}`;
-}
-
-function branchId(value) {
-  const next = String(value || "rohrmoser").trim().toLowerCase();
-  if (!/^[a-z0-9_-]{2,60}$/.test(next)) {
-    const error = new Error("Sucursal fiscal invalida.");
-    error.statusCode = 400;
-    throw error;
-  }
-  return next;
 }
 
 function defaultSettings(id) {
@@ -191,61 +162,6 @@ function validateSettings(settings) {
   if (settings.branchCode && !/^\d{3}$/.test(settings.branchCode)) throw Object.assign(new Error("El codigo de sucursal debe tener 3 digitos."), { statusCode: 400 });
   if (settings.terminalCode && !/^\d{5}$/.test(settings.terminalCode)) throw Object.assign(new Error("El codigo de terminal debe tener 5 digitos."), { statusCode: 400 });
   if (settings.callbackUrl && !/^https:\/\/.+/i.test(settings.callbackUrl)) throw Object.assign(new Error("La URL de callback debe empezar con https://."), { statusCode: 400 });
-}
-
-async function pool() {
-  if (!pgPool) {
-    const { Pool } = require("pg");
-    pgPool = new Pool({ connectionString: databaseUrl, max: 3 });
-  }
-  if (!pgReady) {
-    await pgPool.query(`
-      CREATE TABLE IF NOT EXISTS hacienda_company_settings (
-        id text PRIMARY KEY,
-        branch_id text UNIQUE NOT NULL,
-        enabled boolean NOT NULL DEFAULT false,
-        direct_submission_enabled boolean NOT NULL DEFAULT false,
-        legacy_provider_enabled boolean NOT NULL DEFAULT true,
-        environment text NOT NULL DEFAULT 'Sandbox',
-        issuer_id_type text NOT NULL DEFAULT '',
-        issuer_id_number text NOT NULL DEFAULT '',
-        issuer_legal_name text NOT NULL DEFAULT '',
-        issuer_trade_name text NOT NULL DEFAULT '',
-        economic_activity_code text NOT NULL DEFAULT '',
-        branch_code text NOT NULL DEFAULT '',
-        terminal_code text NOT NULL DEFAULT '',
-        api_username text NOT NULL DEFAULT '',
-        api_password_encrypted text NOT NULL DEFAULT '',
-        p12_encrypted text NOT NULL DEFAULT '',
-        p12_pin_encrypted text NOT NULL DEFAULT '',
-        p12_storage_ref text NOT NULL DEFAULT '',
-        issuer_email text NOT NULL DEFAULT '',
-        province text NOT NULL DEFAULT '',
-        canton text NOT NULL DEFAULT '',
-        district text NOT NULL DEFAULT '',
-        other_address text NOT NULL DEFAULT '',
-        default_currency text NOT NULL DEFAULT 'CRC',
-        system_provider text NOT NULL DEFAULT '',
-        submission_method text NOT NULL DEFAULT 'LegacyProvider',
-        callback_url text NOT NULL DEFAULT '',
-        created_at timestamptz NOT NULL DEFAULT now(),
-        updated_at timestamptz NOT NULL DEFAULT now()
-      )
-    `);
-    await pgPool.query(`
-      CREATE TABLE IF NOT EXISTS hacienda_audit_log (
-        id text PRIMARY KEY,
-        branch_id text NOT NULL,
-        user_id text NOT NULL DEFAULT '',
-        user_name text NOT NULL DEFAULT '',
-        action text NOT NULL,
-        details jsonb NOT NULL DEFAULT '{}'::jsonb,
-        created_at timestamptz NOT NULL DEFAULT now()
-      )
-    `);
-    pgReady = true;
-  }
-  return pgPool;
 }
 
 async function readStore() {
@@ -360,7 +276,7 @@ async function writeAudit(entry) {
   );
 }
 
-async function saveSettings(payload) {
+async function saveSettings(payload, actor) {
   const id = branchId(payload.branchId);
   const current = await readSettings(id);
   const next = { ...current, branchId: id, id: current.id || `hac-${id}` };
@@ -461,8 +377,8 @@ async function saveSettings(payload) {
   await writeAudit({
     id: crypto.randomUUID(),
     branchId: id,
-    userId: "session",
-    userName: "Administrador",
+    userId: actor?.id || "",
+    userName: actor?.name || "Administrador",
     action: "hacienda.config.update",
     details: { enabled: next.enabled, directSubmissionEnabled: next.directSubmissionEnabled, environment: next.environment }
   });
@@ -484,56 +400,25 @@ function missingFields(settings) {
   ].filter(([field]) => field !== "ok" && !settings[field]).map(([, label]) => label);
 }
 
-async function originalApi(req, apiPath) {
-  const authorization = String(req.headers.authorization || "");
-  const response = await fetch(`http://127.0.0.1:${port}${apiPath}`, {
-    headers: authorization ? { Authorization: authorization } : {}
-  });
-  const text = await response.text();
-  let payload = {};
-  try {
-    payload = text ? JSON.parse(text) : {};
-  } catch (error) {
-    payload = {};
-  }
-  return { status: response.status, ok: response.ok, payload };
-}
-
-async function requireLogin(req) {
-  const response = await originalApi(req, "/api/state");
-  if (!response.ok) {
-    const error = new Error(response.payload?.message || "Sesion requerida.");
-    error.statusCode = response.status;
-    throw error;
-  }
-  return response.payload?.state || {};
-}
-
-async function requireAdmin(req) {
-  const response = await originalApi(req, "/api/audit");
-  if (!response.ok) {
-    const error = new Error("Solo un administrador puede modificar configuracion de Hacienda.");
-    error.statusCode = response.status === 401 ? 401 : 403;
-    throw error;
-  }
-}
+const requireAdmin = (req) =>
+  shared.requireAdmin(req, null, "Solo un administrador puede modificar configuracion de Hacienda.");
 
 async function handleHaciendaApi(req, res, url) {
   const pathname = url.pathname;
-  const state = await requireLogin(req);
+  const { state, user } = await shared.requireLogin(req);
+  const isAdmin = core.isFullAccessUser(user);
   const id = branchId(url.searchParams.get("branchId") || state.currentBranchId || "rohrmoser");
 
   if (pathname === "/api/hacienda/config" && req.method === "GET") {
     const settings = await readSettings(id);
-    const admin = (await originalApi(req, "/api/audit")).ok;
-    sendJson(res, 200, { ok: true, config: sanitized(settings, admin) });
+    sendJson(res, 200, { ok: true, config: sanitized(settings, isAdmin) });
     return true;
   }
 
   if (pathname === "/api/hacienda/config" && req.method === "PUT") {
     await requireAdmin(req);
     const payload = await readJson(req);
-    const saved = await saveSettings({ ...payload, branchId: payload.branchId || id });
+    const saved = await saveSettings({ ...payload, branchId: payload.branchId || id }, user);
     sendJson(res, 200, { ok: true, config: sanitized(saved, true) });
     return true;
   }
@@ -632,6 +517,13 @@ server.on("request", async (req, res) => {
   }
 });
 
-server.listen(port, host, () => {
-  console.log(`Chic & Co backend listo en http://${host}:${port}`);
-});
+// Solo escucha si este archivo es el punto de entrada. Cuando lo carga una fase
+// posterior, el listen ocurre alli, ya con todas las rutas montadas: de lo
+// contrario el servidor acepta peticiones antes de registrar las fases 3 a 5.
+if (require.main === module) {
+  server.listen(port, host, () => {
+    console.log(`Chic & Co backend listo en http://${host}:${port}`);
+  });
+}
+
+module.exports = { server, readSettings, encryptionConfigured };

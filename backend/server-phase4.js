@@ -3,17 +3,18 @@
 const path = require("path");
 const crypto = require("crypto");
 const { promises: fs } = require("fs");
-const { server } = require("./server");
+const core = require("./server");
+const shared = require("./hacienda-shared");
+const phase3 = require("./server-phase3");
 
-require("./server-phase3");
+const { server } = core;
+const { branchId, pool, readJson, withFileLock } = shared;
 
 const rootDir = path.resolve(__dirname, "..");
 const dataDir = path.join(__dirname, "data");
 const storePath = path.join(dataDir, "hacienda-phase3.json");
 const port = Number(process.env.PORT || 4173);
-const databaseUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL || "";
-let pgPool = null;
-let pgReady = false;
+const databaseUrl = shared.databaseUrl;
 
 const meta = {
   "01": ["Factura electronica", "FacturaElectronica", "https://cdn.comprobanteselectronicos.go.cr/xml-schemas/v4.4/facturaElectronica"],
@@ -36,12 +37,6 @@ function money(value) {
 function number(value) {
   const next = Number(value || 0);
   return Number.isFinite(next) ? next : 0;
-}
-
-function branchId(value) {
-  const id = clean(value || "rohrmoser").toLowerCase();
-  if (!/^[a-z0-9_-]{2,60}$/.test(id)) throw Object.assign(new Error("Sucursal fiscal invalida."), { statusCode: 400 });
-  return id;
 }
 
 function docType(value) {
@@ -77,41 +72,6 @@ function sendXml(res, status, payload) {
   res.end(payload);
 }
 
-async function readBody(req) {
-  return new Promise((resolve, reject) => {
-    let body = "";
-    req.setEncoding("utf8");
-    req.on("data", (chunk) => {
-      body += chunk;
-      if (Buffer.byteLength(body) > 1024 * 1024) {
-        reject(new Error("REQUEST_TOO_LARGE"));
-        req.destroy();
-      }
-    });
-    req.on("end", () => resolve(body));
-    req.on("error", reject);
-  });
-}
-
-async function readJson(req) {
-  const body = await readBody(req);
-  return body ? JSON.parse(body) : {};
-}
-
-async function pool() {
-  if (!databaseUrl) return null;
-  if (!pgPool) {
-    const { Pool } = require("pg");
-    pgPool = new Pool({ connectionString: databaseUrl, max: 3 });
-  }
-  if (!pgReady) {
-    await pgPool.query(`CREATE TABLE IF NOT EXISTS hacienda_consecutive_counters (id text PRIMARY KEY, branch_id text NOT NULL, document_type text NOT NULL, branch_code text NOT NULL, terminal_code text NOT NULL, last_number bigint NOT NULL DEFAULT 0, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), UNIQUE (branch_id, document_type, branch_code, terminal_code))`);
-    await pgPool.query(`CREATE TABLE IF NOT EXISTS hacienda_electronic_documents (id text PRIMARY KEY, branch_id text NOT NULL, invoice_id text NOT NULL, document_type text NOT NULL, clave text NOT NULL DEFAULT '', consecutivo text NOT NULL DEFAULT '', issued_at timestamptz, environment text NOT NULL DEFAULT 'Sandbox', internal_status text NOT NULL DEFAULT 'Draft', hacienda_status text NOT NULL DEFAULT '', validation_status text NOT NULL DEFAULT 'Pending', validation_errors jsonb NOT NULL DEFAULT '[]'::jsonb, totals jsonb NOT NULL DEFAULT '{}'::jsonb, xml_original text NOT NULL DEFAULT '', xml_signed text NOT NULL DEFAULT '', xml_hacienda_response text NOT NULL DEFAULT '', json_sent jsonb NOT NULL DEFAULT '{}'::jsonb, http_status integer, location_header text NOT NULL DEFAULT '', hacienda_error text NOT NULL DEFAULT '', attempt_count integer NOT NULL DEFAULT 0, last_attempt_at timestamptz, sent_at timestamptz, response_at timestamptz, next_status_check_at timestamptz, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), UNIQUE (branch_id, invoice_id, document_type))`);
-    pgReady = true;
-  }
-  return pgPool;
-}
-
 async function fileStore() {
   try {
     return JSON.parse(await fs.readFile(storePath, "utf8"));
@@ -128,36 +88,8 @@ async function writeStore(store) {
   await fs.rename(tmp, storePath);
 }
 
-async function api(req, apiPath, options = {}) {
-  const authorization = String(req.headers.authorization || "");
-  const response = await fetch(`http://127.0.0.1:${port}${apiPath}`, {
-    method: options.method || "GET",
-    headers: {
-      ...(authorization ? { Authorization: authorization } : {}),
-      ...(options.body ? { "Content-Type": "application/json" } : {})
-    },
-    body: options.body ? JSON.stringify(options.body) : undefined
-  });
-  const text = await response.text();
-  let payload = {};
-  try {
-    payload = text ? JSON.parse(text) : {};
-  } catch (error) {
-    payload = {};
-  }
-  return { ok: response.ok, status: response.status, payload, text };
-}
-
-async function requireLogin(req) {
-  const response = await api(req, "/api/state");
-  if (!response.ok) throw Object.assign(new Error(response.payload?.message || "Sesion requerida."), { statusCode: response.status });
-  return response.payload?.state || {};
-}
-
-async function requireAdmin(req) {
-  const response = await api(req, "/api/audit");
-  if (!response.ok) throw Object.assign(new Error("Solo un administrador puede generar XML fiscal."), { statusCode: response.status === 401 ? 401 : 403 });
-}
+const requireAdmin = (req) =>
+  shared.requireAdmin(req, null, "Solo un administrador puede generar XML fiscal.");
 
 async function readConfig(id) {
   const db = await pool();
@@ -180,10 +112,8 @@ async function readConfig(id) {
   return { branchId: id, environment: "Sandbox", issuerIdType: "", issuerIdNumber: "", issuerLegalName: "Chic & Co", economicActivityCode: "", branchCode: "", terminalCode: "", issuerEmail: "", defaultCurrency: "CRC" };
 }
 
-async function validate(req, id, invoiceId, type) {
-  const response = await api(req, "/api/hacienda/validate-invoice", { method: "POST", body: { branchId: id, invoiceId, documentType: type } });
-  if (!response.ok) throw Object.assign(new Error(response.payload?.message || "No se pudo validar la factura."), { statusCode: response.status });
-  return response.payload?.validation || {};
+async function validate(state, id, invoiceId, type) {
+  return phase3.validateInvoice(state, id, invoiceId, type);
 }
 
 function fiscalDate(date) {
@@ -223,12 +153,17 @@ async function nextConsecutive(config, id, type, existing) {
     const result = await db.query(`INSERT INTO hacienda_consecutive_counters (id, branch_id, document_type, branch_code, terminal_code, last_number, updated_at) VALUES ($1,$2,$3,$4,$5,1,now()) ON CONFLICT (branch_id, document_type, branch_code, terminal_code) DO UPDATE SET last_number = hacienda_consecutive_counters.last_number + 1, updated_at = now() RETURNING last_number`, [counterId, id, type, branchCode, terminalCode]);
     return `${branchCode}${terminalCode}${type}${String(result.rows[0].last_number).padStart(10, "0").slice(-10)}`;
   }
-  const store = await fileStore();
-  const key = `${id}:${type}:${branchCode}:${terminalCode}`;
-  const lastNumber = Number(store.counters?.[key]?.lastNumber || 0) + 1;
-  store.counters = { ...(store.counters || {}), [key]: { branchId: id, documentType: type, branchCode, terminalCode, lastNumber, updatedAt: new Date().toISOString() } };
-  await writeStore(store);
-  return `${branchCode}${terminalCode}${type}${String(lastNumber).padStart(10, "0").slice(-10)}`;
+  // Sin Postgres el contador vive en un archivo: el ciclo leer-incrementar-
+  // escribir se serializa para que dos peticiones simultaneas no reserven el
+  // mismo consecutivo fiscal.
+  return withFileLock(storePath, async () => {
+    const store = await fileStore();
+    const key = `${id}:${type}:${branchCode}:${terminalCode}`;
+    const lastNumber = Number(store.counters?.[key]?.lastNumber || 0) + 1;
+    store.counters = { ...(store.counters || {}), [key]: { branchId: id, documentType: type, branchCode, terminalCode, lastNumber, updatedAt: new Date().toISOString() } };
+    await writeStore(store);
+    return `${branchCode}${terminalCode}${type}${String(lastNumber).padStart(10, "0").slice(-10)}`;
+  });
 }
 
 function payment(method) {
@@ -338,6 +273,7 @@ async function saveDocument(validation, fiscal, unsignedXml, status) {
     const result = await db.query(`INSERT INTO hacienda_electronic_documents (id, branch_id, invoice_id, document_type, clave, consecutivo, issued_at, environment, internal_status, hacienda_status, validation_status, validation_errors, totals, xml_original, json_sent, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7::timestamptz,$8,$9,'',$10,$11::jsonb,$12::jsonb,$13,$14::jsonb,now()) ON CONFLICT (branch_id, invoice_id, document_type) DO UPDATE SET clave=EXCLUDED.clave, consecutivo=EXCLUDED.consecutivo, issued_at=EXCLUDED.issued_at, environment=EXCLUDED.environment, internal_status=EXCLUDED.internal_status, validation_status=EXCLUDED.validation_status, validation_errors=EXCLUDED.validation_errors, totals=EXCLUDED.totals, xml_original=EXCLUDED.xml_original, json_sent=EXCLUDED.json_sent, updated_at=now() RETURNING *`, [fiscal.id, validation.branchId, validation.invoiceId, validation.documentType, fiscal.clave, fiscal.consecutivo, fiscal.issuedAt, validation.config.environment || "Sandbox", status, status, JSON.stringify(validation.findings || []), JSON.stringify(validation.totals || {}), unsignedXml, JSON.stringify(payload)]);
     return publicDoc(result.rows[0]);
   }
+  return withFileLock(storePath, async () => {
   const store = await fileStore();
   const docs = Array.isArray(store.documents) ? store.documents : [];
   const index = docs.findIndex((doc) => doc.branchId === validation.branchId && doc.invoiceId === validation.invoiceId && doc.documentType === validation.documentType);
@@ -348,6 +284,7 @@ async function saveDocument(validation, fiscal, unsignedXml, status) {
   store.documents = docs.slice(0, 300);
   await writeStore(store);
   return doc;
+  });
 }
 
 async function findXml(documentId) {
@@ -362,20 +299,22 @@ async function findXml(documentId) {
   return doc ? { document: publicDoc(doc), xml: doc.xmlOriginal || "" } : null;
 }
 
-async function audit(id, details) {
+async function audit(id, details, actor) {
   const db = await pool();
-  const entry = { id: crypto.randomUUID(), branchId: id, userId: "session", userName: "Administrador", action: "hacienda.document.xml", details, createdAt: new Date().toISOString() };
+  const entry = { id: crypto.randomUUID(), branchId: id, userId: actor?.id || "", userName: actor?.name || "Administrador", action: "hacienda.document.xml", details, createdAt: new Date().toISOString() };
   if (db) {
     await db.query("INSERT INTO hacienda_audit_log (id, branch_id, user_id, user_name, action, details, created_at) VALUES ($1,$2,$3,$4,$5,$6::jsonb,now())", [entry.id, entry.branchId, entry.userId, entry.userName, entry.action, JSON.stringify(entry.details)]);
     return;
   }
-  const store = await fileStore();
-  store.auditLog = [entry, ...(store.auditLog || [])].slice(0, 300);
-  await writeStore(store);
+  await withFileLock(storePath, async () => {
+    const store = await fileStore();
+    store.auditLog = [entry, ...(store.auditLog || [])].slice(0, 300);
+    await writeStore(store);
+  });
 }
 
 async function handlePhase4(req, res, url) {
-  const state = await requireLogin(req);
+  const { state, user } = await shared.requireLogin(req);
   const id = branchId(url.searchParams.get("branchId") || state.currentBranchId || "rohrmoser");
   if (url.pathname === "/api/hacienda/documents/xml" && req.method === "GET") {
     await requireAdmin(req);
@@ -388,7 +327,7 @@ async function handlePhase4(req, res, url) {
     await requireAdmin(req);
     const payload = await readJson(req);
     const type = docType(payload.documentType);
-    const validation = await validate(req, branchId(payload.branchId || id), payload.invoiceId, type);
+    const validation = await validate(state, branchId(payload.branchId || id), payload.invoiceId, type);
     const errors = (validation.findings || []).filter((finding) => finding.severity === "error");
     if (errors.length) return sendJson(res, 400, { ok: false, message: "La factura todavia tiene errores fiscales.", validation });
     const config = await readConfig(validation.branchId);
@@ -400,7 +339,7 @@ async function handlePhase4(req, res, url) {
     const status = warnings.length ? "XmlNeedsReview" : "XmlReady";
     const unsignedXml = buildXml(validation, config, fiscal);
     const document = await saveDocument(validation, fiscal, unsignedXml, status);
-    await audit(validation.branchId, { invoiceId: validation.invoiceId, documentType: type, internalStatus: status, warnings: warnings.length });
+    await audit(validation.branchId, { invoiceId: validation.invoiceId, documentType: type, internalStatus: status, warnings: warnings.length }, user);
     return sendJson(res, 200, { ok: true, document, validation, xml: unsignedXml });
   }
   return sendJson(res, 404, { ok: false, message: "Ruta de fase 4 no encontrada." });
@@ -444,3 +383,6 @@ server.on("request", async (req, res) => {
     return sendJson(res, error.statusCode || 500, { ok: false, message: error.message || "Error interno de fase 4." });
   }
 });
+
+// Expuesto para pruebas: son funciones puras del armado fiscal.
+module.exports = { clave, docType, taxRateCode, fiscalDate, buildXml, nextConsecutive };

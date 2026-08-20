@@ -3,18 +3,20 @@
 const path = require("path");
 const crypto = require("crypto");
 const { promises: fs } = require("fs");
-const { server } = require("./server");
+const core = require("./server");
+const shared = require("./hacienda-shared");
 
 require("./server-hacienda");
+
+const { server } = core;
+const { branchId, pool, readJson, readJsonFile, writeJsonFile, withFileLock } = shared;
 
 const rootDir = path.resolve(__dirname, "..");
 const dataDir = path.join(__dirname, "data");
 const settingsPath = path.join(dataDir, "hacienda-settings.json");
 const phase3Path = path.join(dataDir, "hacienda-phase3.json");
 const port = Number(process.env.PORT || 4173);
-const databaseUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL || "";
-let pgPool = null;
-let pgReady = false;
+const databaseUrl = shared.databaseUrl;
 
 const documentTypes = {
   "01": "Factura electronica",
@@ -36,16 +38,6 @@ function sendJson(res, statusCode, payload) {
     "Content-Length": Buffer.byteLength(body)
   });
   res.end(body);
-}
-
-function branchId(value) {
-  const next = String(value || "rohrmoser").trim().toLowerCase();
-  if (!/^[a-z0-9_-]{2,60}$/.test(next)) {
-    const error = new Error("Sucursal fiscal invalida.");
-    error.statusCode = 400;
-    throw error;
-  }
-  return next;
 }
 
 function documentType(value) {
@@ -72,100 +64,6 @@ function firstText(...values) {
     if (text) return text;
   }
   return "";
-}
-
-async function readBody(req) {
-  return new Promise((resolve, reject) => {
-    let body = "";
-    req.setEncoding("utf8");
-    req.on("data", (chunk) => {
-      body += chunk;
-      if (Buffer.byteLength(body) > 1024 * 1024) {
-        reject(new Error("REQUEST_TOO_LARGE"));
-        req.destroy();
-      }
-    });
-    req.on("end", () => resolve(body));
-    req.on("error", reject);
-  });
-}
-
-async function readJson(req) {
-  const body = await readBody(req);
-  return body ? JSON.parse(body) : {};
-}
-
-async function pool() {
-  if (!databaseUrl) return null;
-  if (!pgPool) {
-    const { Pool } = require("pg");
-    pgPool = new Pool({ connectionString: databaseUrl, max: 3 });
-  }
-  if (!pgReady) {
-    await pgPool.query(`
-      CREATE TABLE IF NOT EXISTS hacienda_consecutive_counters (
-        id text PRIMARY KEY,
-        branch_id text NOT NULL,
-        document_type text NOT NULL,
-        branch_code text NOT NULL,
-        terminal_code text NOT NULL,
-        last_number bigint NOT NULL DEFAULT 0,
-        created_at timestamptz NOT NULL DEFAULT now(),
-        updated_at timestamptz NOT NULL DEFAULT now(),
-        UNIQUE (branch_id, document_type, branch_code, terminal_code)
-      )
-    `);
-    await pgPool.query(`
-      CREATE TABLE IF NOT EXISTS hacienda_electronic_documents (
-        id text PRIMARY KEY,
-        branch_id text NOT NULL,
-        invoice_id text NOT NULL,
-        document_type text NOT NULL,
-        clave text NOT NULL DEFAULT '',
-        consecutivo text NOT NULL DEFAULT '',
-        issued_at timestamptz,
-        environment text NOT NULL DEFAULT 'Sandbox',
-        internal_status text NOT NULL DEFAULT 'Draft',
-        hacienda_status text NOT NULL DEFAULT '',
-        validation_status text NOT NULL DEFAULT 'Pending',
-        validation_errors jsonb NOT NULL DEFAULT '[]'::jsonb,
-        totals jsonb NOT NULL DEFAULT '{}'::jsonb,
-        xml_original text NOT NULL DEFAULT '',
-        xml_signed text NOT NULL DEFAULT '',
-        xml_hacienda_response text NOT NULL DEFAULT '',
-        json_sent jsonb NOT NULL DEFAULT '{}'::jsonb,
-        http_status integer,
-        location_header text NOT NULL DEFAULT '',
-        hacienda_error text NOT NULL DEFAULT '',
-        attempt_count integer NOT NULL DEFAULT 0,
-        last_attempt_at timestamptz,
-        sent_at timestamptz,
-        response_at timestamptz,
-        next_status_check_at timestamptz,
-        created_at timestamptz NOT NULL DEFAULT now(),
-        updated_at timestamptz NOT NULL DEFAULT now(),
-        UNIQUE (branch_id, invoice_id, document_type)
-      )
-    `);
-    pgReady = true;
-  }
-  return pgPool;
-}
-
-async function readJsonFile(filePath, fallback) {
-  try {
-    return JSON.parse(await fs.readFile(filePath, "utf8"));
-  } catch (error) {
-    if (error.code === "ENOENT") return fallback;
-    throw error;
-  }
-}
-
-async function writeJsonFile(filePath, payload) {
-  await fs.mkdir(dataDir, { recursive: true });
-  const tempPath = `${filePath}.${Date.now()}.tmp`;
-  await fs.writeFile(tempPath, JSON.stringify(payload, null, 2), "utf8");
-  await fs.rename(tempPath, filePath);
 }
 
 function defaultHaciendaConfig(id) {
@@ -251,39 +149,8 @@ function publicHaciendaConfig(config) {
   };
 }
 
-async function originalApi(req, apiPath) {
-  const authorization = String(req.headers.authorization || "");
-  const response = await fetch(`http://127.0.0.1:${port}${apiPath}`, {
-    headers: authorization ? { Authorization: authorization } : {}
-  });
-  const text = await response.text();
-  let payload = {};
-  try {
-    payload = text ? JSON.parse(text) : {};
-  } catch (error) {
-    payload = {};
-  }
-  return { status: response.status, ok: response.ok, payload };
-}
-
-async function requireLogin(req) {
-  const response = await originalApi(req, "/api/state");
-  if (!response.ok) {
-    const error = new Error(response.payload?.message || "Sesion requerida.");
-    error.statusCode = response.status;
-    throw error;
-  }
-  return response.payload?.state || {};
-}
-
-async function requireAdmin(req) {
-  const response = await originalApi(req, "/api/audit");
-  if (!response.ok) {
-    const error = new Error("Solo un administrador puede crear borradores fiscales.");
-    error.statusCode = response.status === 401 ? 401 : 403;
-    throw error;
-  }
-}
+const requireAdmin = (req) =>
+  shared.requireAdmin(req, null, "Solo un administrador puede crear borradores fiscales.");
 
 function branchState(state, id) {
   const branch = state?.branches?.[id];
@@ -668,7 +535,7 @@ async function writeAudit(entry) {
 }
 
 async function handlePhase3Api(req, res, url) {
-  const state = await requireLogin(req);
+  const { state, user } = await shared.requireLogin(req);
   const safeBranchId = branchId(url.searchParams.get("branchId") || state.currentBranchId || "rohrmoser");
 
   if (url.pathname === "/api/hacienda/documents" && req.method === "GET") {
@@ -698,8 +565,8 @@ async function handlePhase3Api(req, res, url) {
     await writeAudit({
       id: crypto.randomUUID(),
       branchId: id,
-      userId: "session",
-      userName: "Administrador",
+      userId: user?.id || "",
+      userName: user?.name || "Administrador",
       action: "hacienda.document.draft",
       details: {
         invoiceId: validation.invoiceId,
@@ -803,3 +670,6 @@ server.on("request", async (req, res) => {
     sendJson(res, error.statusCode || 500, { ok: false, message: error.message || "Error interno de fase fiscal." });
   }
 });
+
+// Expuesto para que la fase 4 valide sin hacer una peticion HTTP a si misma.
+module.exports = { validateInvoice, documentType, listDocuments };

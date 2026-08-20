@@ -258,10 +258,69 @@
     }
   }
 
+  // Copia del estado tal como lo confirmo el backend por ultima vez. Es la
+  // base de la fusion a tres bandas cuando otro usuario guarda primero.
+  let bridgeLastSyncedState = null;
+
+  function snapshotClone(value) {
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  function sameCollection(left, right) {
+    return JSON.stringify(left || []) === JSON.stringify(right || []);
+  }
+
+  // Toma el estado del servidor y le vuelve a aplicar solo las colecciones que
+  // este navegador cambio desde la ultima confirmacion. Asi, si recepcion edito
+  // clientes y otra persona edito facturas, sobreviven los dos cambios.
+  function mergeAgainstServer(base, mine, theirs) {
+    const merged = normalizeStateSnapshot(theirs);
+
+    branchOptions.forEach((branch) => {
+      branchDataKeys.forEach((key) => {
+        const baseData = base?.branches?.[branch.id]?.[key];
+        const myData = mine?.branches?.[branch.id]?.[key];
+        if (!sameCollection(myData, baseData)) {
+          merged.branches[branch.id][key] = snapshotClone(myData || []);
+        }
+      });
+    });
+
+    if (!sameCollection(mine?.users, base?.users)) {
+      merged.users = snapshotClone(mine.users);
+    }
+
+    if (branchOptions.some((branch) => branch.id === mine?.currentBranchId)) {
+      merged.currentBranchId = mine.currentBranchId;
+    }
+    if (merged.users.some((user) => user.id === mine?.currentUserId && user.active)) {
+      merged.currentUserId = mine.currentUserId;
+    }
+    writeBranchData(merged, merged.branches[merged.currentBranchId]);
+    merged.stateRevision = theirs?.stateRevision;
+    return merged;
+  }
+
   function adoptBackendState(snapshot) {
     if (!snapshot) return;
-    state = typeof normalizeStateSnapshot === "function" ? normalizeStateSnapshot(snapshot) : snapshot;
+
+    // La sesion y la sucursal abiertas en este navegador mandan sobre las que
+    // venga guardadas en el servidor: son de quien las cambio de ultimo.
+    const localUserId = state?.currentUserId;
+    const localBranchId = state?.currentBranchId;
+    const next = normalizeStateSnapshot(snapshot);
+
+    if (next.users.some((user) => user.id === localUserId && user.active)) {
+      next.currentUserId = localUserId;
+    }
+    if (branchOptions.some((branch) => branch.id === localBranchId)) {
+      next.currentBranchId = localBranchId;
+      writeBranchData(next, next.branches[localBranchId]);
+    }
+
+    state = next;
     const removedSeedRecords = removeSeedRecords(state);
+    bridgeLastSyncedState = snapshotClone(state);
     try {
       localStorage.setItem(storageKey, JSON.stringify(state));
     } catch (error) {
@@ -380,6 +439,7 @@
       }
       const error = new Error(payload.message || "Error del backend");
       error.status = response.status;
+      error.payload = payload;
       throw error;
     }
 
@@ -419,9 +479,9 @@
     }, immediate ? 0 : 250);
   };
 
-  syncStateToBackend = async function ({ force = false, keepalive = false } = {}) {
+  syncStateToBackend = async function ({ force = false, keepalive = false, isRetry = false } = {}) {
     if ((!isBackendAvailable() && !force) || !backendAuthToken()) return;
-    if (bridgeSaveInFlight) {
+    if (bridgeSaveInFlight && !isRetry) {
       bridgeSaveQueued = true;
       return;
     }
@@ -429,15 +489,34 @@
     bridgeSaveInFlight = true;
     try {
       syncCurrentBranchData();
-      await backendRequest("/state", {
+      const result = await backendRequest("/state", {
         method: "PUT",
-        body: JSON.stringify({ state }),
+        body: JSON.stringify({ state, baseRevision: state.stateRevision }),
         keepalive
       });
+      if (result?.stateRevision !== undefined) state.stateRevision = result.stateRevision;
+      bridgeLastSyncedState = snapshotClone(state);
       clearPendingOnlineSync();
       showSyncSavedToast();
     } catch (error) {
-      if (error.status === 401) {
+      // Otro usuario guardo primero. Se fusionan los cambios de este navegador
+      // sobre el estado del servidor y se reintenta una sola vez.
+      if (error.status === 409 && error.payload?.state && !isRetry) {
+        state = mergeAgainstServer(bridgeLastSyncedState, state, error.payload.state);
+        storeStateLocally();
+        if (document.body.classList.contains("is-authenticated")) renderAll();
+        bridgeSaveInFlight = false;
+        return syncStateToBackend({ force: true, keepalive, isRetry: true });
+      }
+
+      if (error.status === 409) {
+        adoptBackendState(error.payload?.state);
+        if (document.body.classList.contains("is-authenticated")) renderAll();
+        clearPendingOnlineSync();
+        if (typeof showToast === "function") {
+          showToast("Otro usuario guardo primero. Se recargaron los datos.");
+        }
+      } else if (error.status === 401) {
         clearSessionUser();
         showLogin("Sesion vencida. Ingrese de nuevo.");
       } else {
@@ -730,18 +809,91 @@
     true
   );
 
+  // Cierra tambien la sesion en el servidor: el token deja de servir en
+  // cualquier otro navegador donde se hubiera copiado.
+  async function revokeServerSession() {
+    if (!backendAuthToken()) return;
+    try {
+      await backendRequest("/logout", { method: "POST" });
+    } catch (error) {
+      // Aunque el servidor no responda, la sesion local se cierra igual.
+    }
+  }
+
   const originalLogout = logout;
   logout = function () {
     if (hasPendingOnlineSync() && backendAuthToken()) {
-      syncStateToBackend({ force: true }).finally(() => {
-        clearBackendAuthToken();
-        originalLogout();
-      });
+      syncStateToBackend({ force: true })
+        .then(revokeServerSession)
+        .finally(() => {
+          clearBackendAuthToken();
+          originalLogout();
+        });
       return;
     }
-    clearBackendAuthToken();
-    originalLogout();
+    revokeServerSession().finally(() => {
+      clearBackendAuthToken();
+      originalLogout();
+    });
   };
+
+  /* ---------------------------------------------------------------------
+   * Cambio de contrasena
+   * ------------------------------------------------------------------ */
+
+  const changePasswordLabel = "Cambiar contrasena";
+
+  if (typeof dropdownOptions === "function" && !window.__chicPasswordMenu) {
+    window.__chicPasswordMenu = true;
+    const originalDropdownOptions = dropdownOptions;
+    dropdownOptions = function (menuName) {
+      const options = originalDropdownOptions(menuName) || [];
+      if (menuName !== "usuario" || options.some((item) => item.label === changePasswordLabel)) {
+        return options;
+      }
+      return [...options, { label: changePasswordLabel }];
+    };
+  }
+
+  async function changeOwnPassword() {
+    const currentPassword = window.prompt("Contrasena actual");
+    if (currentPassword === null) return;
+
+    const newPassword = window.prompt("Contrasena nueva (minimo 10 caracteres)");
+    if (newPassword === null) return;
+
+    if (String(newPassword).length < 10) {
+      showToast("La contrasena nueva debe tener al menos 10 caracteres");
+      return;
+    }
+    if (window.prompt("Repita la contrasena nueva") !== newPassword) {
+      showToast("Las contrasenas no coinciden");
+      return;
+    }
+
+    try {
+      await backendRequest("/password", {
+        method: "POST",
+        body: JSON.stringify({ currentPassword, newPassword })
+      });
+      showToast("Contrasena actualizada");
+    } catch (error) {
+      showToast(error.message || "No se pudo cambiar la contrasena");
+    }
+  }
+
+  document.addEventListener(
+    "click",
+    (event) => {
+      const option = event.target.closest(`[data-menu-label="${changePasswordLabel}"]`);
+      if (!option) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      closeDropdown();
+      changeOwnPassword();
+    },
+    true
+  );
 
   setTimeout(async () => {
     const online = await hydrateBackendState();

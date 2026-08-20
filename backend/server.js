@@ -4,6 +4,7 @@ const http = require("http");
 const path = require("path");
 const crypto = require("crypto");
 const { promises: fs } = require("fs");
+const mediaStore = require("./media-store");
 
 const rootDir = path.resolve(__dirname, "..");
 const dataDir = path.join(__dirname, "data");
@@ -21,8 +22,16 @@ const sessions = new Map();
 const loginAttempts = new Map();
 const realtimeClients = new Map();
 let realtimeRevision = 0;
-const receptionPasswordHash = "5813f24ae4432b277c8c92a78bf035caaa8f5a9ad0031441f5eccd2d4c0e2fd0";
-const monicaPasswordHash = "e7d081ee45073bc0da9fd633a609db90be0adc2abac6ac47e79e375544e81c22";
+
+// Las contrasenas reales deben venir de variables de entorno del proveedor.
+// Los valores por defecto solo existen para no romper instalaciones anteriores
+// y deben rotarse: estan publicados en el historial del repositorio.
+const receptionPasswordHash =
+  process.env.CHIC_RECEPCION_PASSWORD_HASH || "5813f24ae4432b277c8c92a78bf035caaa8f5a9ad0031441f5eccd2d4c0e2fd0";
+const monicaPasswordHash =
+  process.env.CHIC_MONICA_PASSWORD_HASH || "e7d081ee45073bc0da9fd633a609db90be0adc2abac6ac47e79e375544e81c22";
+const bootstrapEmail = String(process.env.CHIC_BOOTSTRAP_EMAIL || "").trim().toLowerCase();
+const bootstrapPassword = String(process.env.CHIC_BOOTSTRAP_PASSWORD || "");
 
 const superPermissionModules = ["clientes", "inventario", "procedimientos", "enCurso", "planes", "citas", "facturacion", "usuarios"];
 const superUserPermissions = superPermissionModules.reduce((permissions, moduleName) => {
@@ -80,7 +89,7 @@ const systemUserAuth = {
 
 const moduleWriteCollections = {
   clientes: ["clients"],
-  inventario: ["products", "stockMovements"],
+  inventario: ["products", "stockMovements", "locations"],
   procedimientos: ["procedures"],
   enCurso: ["activeProcedures", "products", "stockMovements"],
   planes: ["plans", "activeProcedures", "appointments"],
@@ -88,7 +97,7 @@ const moduleWriteCollections = {
   facturacion: ["invoices", "products", "stockMovements"],
   usuarios: ["users"]
 };
-const branchDataCollections = ["clients", "products", "procedures", "activeProcedures", "plans", "appointments", "invoices", "stockMovements"];
+const branchDataCollections = ["clients", "products", "procedures", "activeProcedures", "plans", "appointments", "invoices", "stockMovements", "locations"];
 const auditLogLimit = 300;
 
 const mimeTypes = {
@@ -154,8 +163,39 @@ function sendError(req, res, statusCode, message) {
   sendJson(req, res, statusCode, { ok: false, message });
 }
 
+const scryptOptions = { N: 16384, r: 8, p: 1 };
+const scryptKeyLength = 64;
+
 function hashPassword(password) {
   return crypto.createHash("sha256").update(String(password)).digest("hex");
+}
+
+function isModernHash(storedHash) {
+  return String(storedHash || "").startsWith("scrypt$");
+}
+
+function hashPasswordModern(password, salt = crypto.randomBytes(16).toString("hex")) {
+  const derived = crypto.scryptSync(String(password), salt, scryptKeyLength, scryptOptions).toString("hex");
+  return `scrypt$${salt}$${derived}`;
+}
+
+function verifyPassword(password, storedHash) {
+  const stored = String(storedHash || "");
+  if (!stored) return false;
+
+  if (isModernHash(stored)) {
+    const [, salt, digest] = stored.split("$");
+    if (!salt || !digest) return false;
+    let derived;
+    try {
+      derived = crypto.scryptSync(String(password), salt, scryptKeyLength, scryptOptions).toString("hex");
+    } catch (error) {
+      return false;
+    }
+    return timingSafeEqualText(derived, digest);
+  }
+
+  return timingSafeEqualText(stored, hashPassword(password));
 }
 
 function timingSafeEqualText(left, right) {
@@ -199,37 +239,92 @@ function clearFailedLogins(req, email) {
   loginAttempts.delete(loginAttemptKey(req, email));
 }
 
-function createSession(user, req) {
+// Las sesiones se guardan en Postgres cuando hay base de datos: el plan
+// gratuito de Render suspende y reinicia el servicio, y un Map en memoria
+// expulsaria a todo el personal en cada reinicio o despliegue.
+async function createSession(user, req) {
   const token = crypto.randomBytes(32).toString("base64url");
   const expiresAt = Date.now() + sessionTtlMs;
-  sessions.set(token, {
+  const session = {
     userId: user.id,
     ip: clientIp(req),
     userAgent: String(req.headers["user-agent"] || "").slice(0, 180),
     expiresAt
-  });
+  };
+
+  sessions.set(token, session);
+
+  if (databaseUrl) {
+    try {
+      const pool = await getPostgresPool();
+      await pool.query(
+        `INSERT INTO app_sessions (token, user_id, ip, user_agent, expires_at)
+         VALUES ($1, $2, $3, $4, to_timestamp($5 / 1000.0))
+         ON CONFLICT (token) DO UPDATE SET expires_at = EXCLUDED.expires_at`,
+        [token, session.userId, session.ip, session.userAgent, expiresAt]
+      );
+      await pool.query("DELETE FROM app_sessions WHERE expires_at <= now()");
+    } catch (error) {
+      console.error("No se pudo guardar la sesion en Postgres:", error.message);
+    }
+  }
+
   return { token, expiresAt };
 }
 
-function sessionFromToken(token) {
-  token = String(token || "").trim();
-  if (!token) return null;
-  const session = sessions.get(token);
-  if (!session || session.expiresAt <= Date.now()) {
-    sessions.delete(token);
-    return null;
+async function destroySession(token) {
+  sessions.delete(token);
+  if (!databaseUrl) return;
+  try {
+    const pool = await getPostgresPool();
+    await pool.query("DELETE FROM app_sessions WHERE token = $1", [token]);
+  } catch (error) {
+    console.error("No se pudo borrar la sesion en Postgres:", error.message);
   }
-
-  return { token, ...session };
 }
 
-function sessionFromRequest(req) {
+async function sessionFromToken(rawToken) {
+  const token = String(rawToken || "").trim();
+  if (!token) return null;
+
+  const cached = sessions.get(token);
+  if (cached) {
+    if (cached.expiresAt > Date.now()) return { token, ...cached };
+    sessions.delete(token);
+  }
+
+  if (!databaseUrl) return null;
+
+  try {
+    const pool = await getPostgresPool();
+    const result = await pool.query(
+      "SELECT user_id, ip, user_agent, expires_at FROM app_sessions WHERE token = $1 AND expires_at > now()",
+      [token]
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+
+    const session = {
+      userId: row.user_id,
+      ip: row.ip || "",
+      userAgent: row.user_agent || "",
+      expiresAt: new Date(row.expires_at).getTime()
+    };
+    sessions.set(token, session);
+    return { token, ...session };
+  } catch (error) {
+    console.error("No se pudo leer la sesion en Postgres:", error.message);
+    return null;
+  }
+}
+
+async function sessionFromRequest(req) {
   const authorization = String(req.headers.authorization || "");
   const match = authorization.match(/^Bearer\s+(.+)$/i);
   return match ? sessionFromToken(match[1]) : null;
 }
 
-function sessionFromQuery(url) {
+async function sessionFromQuery(url) {
   return sessionFromToken(url.searchParams.get("token"));
 }
 
@@ -445,13 +540,21 @@ function backupPayload(state) {
   };
 }
 
+// Fija rol, funcion y permisos de las cuentas de sistema para que un cliente
+// manipulado no pueda escalar privilegios. El hash de contrasena solo se aplica
+// cuando la cuenta todavia no tiene uno guardado, de modo que la contrasena si
+// se pueda cambiar desde la aplicacion.
 function applySystemUserAuth(state) {
   if (!state || !Array.isArray(state.users)) return state;
   return {
     ...state,
     users: state.users.map((user) => {
       const auth = systemUserAuth[user.id];
-      return auth ? { ...user, ...auth } : user;
+      if (!auth) return user;
+      const { passwordHash: seedHash, ...pinned } = auth;
+      const merged = { ...user, ...pinned };
+      if (seedHash && !user.passwordHash) merged.passwordHash = seedHash;
+      return merged;
     })
   };
 }
@@ -495,6 +598,17 @@ async function getPostgresPool() {
         updated_at timestamptz NOT NULL DEFAULT now()
       )
     `);
+    await pgPool.query(`
+      CREATE TABLE IF NOT EXISTS app_sessions (
+        token text PRIMARY KEY,
+        user_id text NOT NULL,
+        ip text NOT NULL DEFAULT '',
+        user_agent text NOT NULL DEFAULT '',
+        expires_at timestamptz NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    await pgPool.query("CREATE INDEX IF NOT EXISTS app_sessions_expires_at_idx ON app_sessions (expires_at)");
     pgReady = true;
   }
 
@@ -543,27 +657,137 @@ async function writeState(nextState) {
   );
 }
 
+const branchIds = ["rohrmoser", "alajuela"];
+
+function emptyBranchData() {
+  return branchDataCollections.reduce((data, collectionName) => {
+    data[collectionName] = [];
+    return data;
+  }, {});
+}
+
+// Estado inicial de una instalacion nueva. Sin CHIC_BOOTSTRAP_EMAIL y
+// CHIC_BOOTSTRAP_PASSWORD el super usuario queda sin correo y no puede entrar:
+// no se hornea ninguna contrasena de administrador por defecto.
+function bootstrapState() {
+  const superUser = {
+    id: "USR-000",
+    name: "Gabriel Arce",
+    email: bootstrapEmail,
+    role: "super",
+    function: "Super usuario",
+    active: true,
+    passwordHash: bootstrapPassword ? hashPasswordModern(bootstrapPassword) : "",
+    permissions: superUserPermissions
+  };
+
+  const seededUsers = ["USR-001", "USR-002", "USR-003", "USR-004"].map((userId) => ({
+    id: userId,
+    name: userId,
+    email: "",
+    role: "recepcion",
+    function: "Pendiente",
+    active: true,
+    passwordHash: "",
+    permissions: {}
+  }));
+
+  return {
+    ...emptyBranchData(),
+    stateRevision: 1,
+    updatedAt: new Date().toISOString(),
+    currentBranchId: branchIds[0],
+    currentUserId: superUser.id,
+    users: [superUser, ...seededUsers],
+    branches: branchIds.reduce((branches, id) => {
+      branches[id] = emptyBranchData();
+      return branches;
+    }, {}),
+    auditLog: []
+  };
+}
+
+let bootstrapPromise = null;
+
+// Devuelve el estado, creandolo la primera vez. Sin esto una base de datos
+// vacia deja la aplicacion inaccesible: no se puede entrar ni restaurar un
+// respaldo porque ambas cosas requieren una sesion.
+async function ensureState() {
+  const current = await readState();
+  if (current) return current;
+
+  if (!bootstrapPromise) {
+    bootstrapPromise = (async () => {
+      const existing = await readState();
+      if (existing) return existing;
+
+      const seeded = applySystemUserAuth(bootstrapState());
+      await writeState(seeded);
+      if (bootstrapEmail && bootstrapPassword) {
+        console.log(`Estado inicial creado. Super usuario: ${bootstrapEmail}`);
+      } else {
+        console.warn(
+          "Estado inicial creado sin super usuario. Configure CHIC_BOOTSTRAP_EMAIL y CHIC_BOOTSTRAP_PASSWORD y reinicie."
+        );
+      }
+      return seeded;
+    })().finally(() => {
+      bootstrapPromise = null;
+    });
+  }
+
+  return bootstrapPromise;
+}
+
+function stateRevision(state) {
+  return Number(state?.stateRevision || 0);
+}
+
+function stampRevision(nextState, currentState) {
+  return {
+    ...nextState,
+    stateRevision: stateRevision(currentState) + 1,
+    updatedAt: new Date().toISOString()
+  };
+}
+
 function publicUser(user) {
   const { passwordHash, ...safeUser } = user;
   return safeUser;
+}
+
+// Sube un hash heredado sha256 a scrypt tras un inicio de sesion correcto.
+// Nunca debe impedir el acceso, por eso ignora cualquier fallo de escritura.
+async function upgradeLegacyHash(state, user, password) {
+  if (isModernHash(user.passwordHash)) return;
+  try {
+    const nextState = {
+      ...state,
+      users: state.users.map((item) =>
+        item.id === user.id ? { ...item, passwordHash: hashPasswordModern(password) } : item
+      )
+    };
+    await writeState(stampRevision(nextState, state));
+  } catch (error) {
+    console.error("No se pudo actualizar el hash de contrasena:", error.message);
+  }
 }
 
 async function handleLogin(req, res) {
   const payload = await readJsonBody(req);
   const email = String(payload.email || "").trim().toLowerCase();
   const password = String(payload.password || "");
-  const state = await readState();
 
-  if (!state) {
-    sendError(req, res, 503, "La base de datos del backend aun no esta inicializada.");
+  if (isLoginRateLimited(req, email)) {
+    sendError(req, res, 429, "Demasiados intentos. Espere unos minutos e intente de nuevo.");
     return;
   }
 
+  const state = await ensureState();
   const users = Array.isArray(state.users) ? state.users : [];
-  const user = users.find((item) => String(item.email || "").trim().toLowerCase() === email);
-  const passwordHash = hashPassword(password);
+  const user = users.find((item) => email && String(item.email || "").trim().toLowerCase() === email);
 
-  if (!user || user.active === false || !timingSafeEqualText(user.passwordHash, passwordHash)) {
+  if (!user || user.active === false || !verifyPassword(password, user.passwordHash)) {
     recordFailedLogin(req, email);
     if (isLoginRateLimited(req, email)) {
       sendError(req, res, 429, "Demasiados intentos. Espere unos minutos e intente de nuevo.");
@@ -574,7 +798,8 @@ async function handleLogin(req, res) {
   }
 
   clearFailedLogins(req, email);
-  const session = createSession(user, req);
+  await upgradeLegacyHash(state, user, password);
+  const session = await createSession(user, req);
   sendJson(req, res, 200, {
     ok: true,
     userId: user.id,
@@ -582,6 +807,137 @@ async function handleLogin(req, res) {
     token: session.token,
     expiresAt: new Date(session.expiresAt).toISOString()
   });
+}
+
+// Cambio de contrasena. Cada usuario puede cambiar la suya con su contrasena
+// actual; un super usuario puede restablecer la de cualquier cuenta.
+async function handlePasswordChange(req, res, session) {
+  const payload = await readJsonBody(req);
+  const state = await ensureState();
+  const actor = sessionUserFromState(state, session);
+
+  if (!actor?.active) {
+    sendError(req, res, 403, "Usuario inactivo o no encontrado.");
+    return;
+  }
+
+  const targetId = String(payload.userId || actor.id);
+  const target = state.users.find((item) => item.id === targetId);
+  if (!target) {
+    sendError(req, res, 404, "Usuario no encontrado.");
+    return;
+  }
+
+  const isSelf = target.id === actor.id;
+  if (!isSelf && !isSuperUser(actor)) {
+    sendError(req, res, 403, "Solo un super usuario puede cambiar la contrasena de otra cuenta.");
+    return;
+  }
+
+  const newPassword = String(payload.newPassword || "");
+  if (newPassword.length < 10) {
+    sendError(req, res, 400, "La contrasena nueva debe tener al menos 10 caracteres.");
+    return;
+  }
+
+  if (isSelf && !verifyPassword(String(payload.currentPassword || ""), target.passwordHash)) {
+    sendError(req, res, 401, "La contrasena actual no es correcta.");
+    return;
+  }
+
+  const nextState = {
+    ...state,
+    users: state.users.map((item) =>
+      item.id === target.id ? { ...item, passwordHash: hashPasswordModern(newPassword) } : item
+    )
+  };
+  addAuditEntry(nextState, actor, isSelf ? "password.change" : "password.reset", [`users:${target.id}`]);
+  await writeState(stampRevision(nextState, state));
+  sendJson(req, res, 200, { ok: true });
+}
+
+/* -------------------------------------------------------------------------
+ * Imágenes de producto
+ * ---------------------------------------------------------------------- */
+
+// Recorre el estado y devuelve todos los identificadores de imagen que siguen
+// referenciados, en las dos sucursales y en el nivel superior.
+function referencedImageIds(state) {
+  const ids = new Set();
+  const collect = (products) => {
+    if (!Array.isArray(products)) return;
+    products.forEach((product) => {
+      if (product?.imageId) ids.add(String(product.imageId));
+    });
+  };
+
+  collect(state?.products);
+  Object.values(state?.branches || {}).forEach((branch) => collect(branch?.products));
+  return ids;
+}
+
+async function handleMediaUpload(req, res, session) {
+  const state = await ensureState();
+  const user = sessionUserFromState(state, session);
+
+  // Subir una foto de producto es escribir en inventario.
+  if (!canWriteModule(user, "inventario") && !isFullAccessUser(user)) {
+    sendError(req, res, 403, "Este usuario no puede modificar el inventario.");
+    return;
+  }
+
+  const payload = await readJsonBody(req);
+  let saved;
+  try {
+    saved = await mediaStore.saveImage({
+      dataUrl: payload.dataUrl,
+      branchId: payload.branchId,
+      kind: "product",
+      ownerId: payload.ownerId,
+      userId: user.id
+    });
+  } catch (error) {
+    sendError(req, res, error.statusCode || 400, error.message || "No se pudo guardar la imagen.");
+    return;
+  }
+
+  sendJson(req, res, 201, {
+    ok: true,
+    image: { id: saved.id, contentType: saved.contentType, byteSize: saved.byteSize }
+  });
+}
+
+async function handleMediaItem(req, res, session, rawId) {
+  if (req.method === "DELETE") {
+    const state = await ensureState();
+    const user = sessionUserFromState(state, session);
+    if (!canWriteModule(user, "inventario") && !isFullAccessUser(user)) {
+      sendError(req, res, 403, "Este usuario no puede modificar el inventario.");
+      return;
+    }
+    const removed = await mediaStore.deleteImage(rawId);
+    sendJson(req, res, removed ? 200 : 404, { ok: removed });
+    return;
+  }
+
+  const image = await mediaStore.readImage(rawId);
+  if (!image) {
+    sendError(req, res, 404, "Imagen no encontrada.");
+    return;
+  }
+
+  setBaseHeaders(req, res);
+  res.writeHead(200, {
+    "Content-Type": image.contentType,
+    "Content-Length": image.buffer.length,
+    // El identificador es aleatorio y el contenido nunca cambia, así que se
+    // puede cachear de forma indefinida, pero solo en el navegador del usuario.
+    "Cache-Control": "private, max-age=31536000, immutable",
+    "Content-Disposition": "inline",
+    "X-Content-Type-Options": "nosniff"
+  });
+  if (req.method === "HEAD") res.end();
+  else res.end(image.buffer);
 }
 
 async function handleApi(req, res, url) {
@@ -608,7 +964,7 @@ async function handleApi(req, res, url) {
     return;
   }
 
-  const session = sessionFromRequest(req) || sessionFromQuery(url);
+  const session = (await sessionFromRequest(req)) || (await sessionFromQuery(url));
   if (!session) {
     sendError(req, res, 401, "Sesion requerida.");
     return;
@@ -619,14 +975,35 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  if (pathname === "/api/logout" && req.method === "POST") {
+    await destroySession(session.token);
+    sendJson(req, res, 200, { ok: true });
+    return;
+  }
+
+  if (pathname === "/api/password" && req.method === "POST") {
+    await handlePasswordChange(req, res, session);
+    return;
+  }
+
+  if (pathname === "/api/media" && req.method === "POST") {
+    await handleMediaUpload(req, res, session);
+    return;
+  }
+
+  if (pathname.startsWith("/api/media/") && (req.method === "GET" || req.method === "DELETE")) {
+    await handleMediaItem(req, res, session, pathname.slice("/api/media/".length));
+    return;
+  }
+
   if (pathname === "/api/state" && req.method === "GET") {
-    const state = await readState();
+    const state = await ensureState();
     sendJson(req, res, 200, { ok: true, state: stripSensitiveState(state) });
     return;
   }
 
   if (pathname === "/api/backup" && req.method === "GET") {
-    const state = await readState();
+    const state = await ensureState();
     const user = sessionUserFromState(state, session);
     if (!isSuperUser(user)) {
       sendError(req, res, 403, "Solo un super usuario puede exportar respaldos.");
@@ -637,7 +1014,7 @@ async function handleApi(req, res, url) {
   }
 
   if (pathname === "/api/backup" && req.method === "POST") {
-    const currentState = await readState();
+    const currentState = await ensureState();
     const user = sessionUserFromState(currentState, session);
     if (!isSuperUser(user)) {
       sendError(req, res, 403, "Solo un super usuario puede importar respaldos.");
@@ -654,14 +1031,14 @@ async function handleApi(req, res, url) {
     const restoredState = preserveProtectedState(nextState, currentState);
     const collections = changedCollections(restoredState, currentState);
     addAuditEntry(restoredState, user, "backup.restore", collections);
-    await writeState(restoredState);
+    await writeState(stampRevision(restoredState, currentState));
     broadcastStateUpdated(session, collections);
     sendJson(req, res, 200, { ok: true });
     return;
   }
 
   if (pathname === "/api/audit" && req.method === "GET") {
-    const state = await readState();
+    const state = await ensureState();
     const user = sessionUserFromState(state, session);
     if (!isFullAccessUser(user)) {
       sendError(req, res, 403, "Solo usuarios administradores pueden ver la bitacora.");
@@ -680,7 +1057,22 @@ async function handleApi(req, res, url) {
       return;
     }
 
-    const currentState = await readState();
+    const currentState = await ensureState();
+
+    // Control de concurrencia optimista: sin esto, dos personas guardando con
+    // segundos de diferencia hacen que la segunda escritura borre la primera.
+    const currentRevision = stateRevision(currentState);
+    if (payload.baseRevision !== undefined && Number(payload.baseRevision) !== currentRevision) {
+      sendJson(req, res, 409, {
+        ok: false,
+        code: "STATE_CONFLICT",
+        message: "Otro usuario guardo primero. Vuelva a cargar los datos antes de guardar.",
+        stateRevision: currentRevision,
+        state: stripSensitiveState(currentState)
+      });
+      return;
+    }
+
     let writableState;
     try {
       writableState = applyWritePolicy(nextState, currentState, session);
@@ -689,9 +1081,19 @@ async function handleApi(req, res, url) {
       return;
     }
     const collections = changedCollections(writableState, currentState);
-    await writeState(writableState);
+    const savedState = stampRevision(writableState, currentState);
+    await writeState(savedState);
+
+    // Si un producto con foto se elimina o se le cambia la imagen, el archivo
+    // anterior deja de estar referenciado y no debe quedarse ocupando espacio.
+    if (collections.some((name) => name.endsWith("products"))) {
+      mediaStore
+        .collectOrphans(referencedImageIds(savedState))
+        .catch((error) => console.error("No se pudieron limpiar imágenes huérfanas:", error.message));
+    }
+
     broadcastStateUpdated(session, collections);
-    sendJson(req, res, 200, { ok: true });
+    sendJson(req, res, 200, { ok: true, stateRevision: stateRevision(savedState) });
     return;
   }
 
@@ -707,7 +1109,7 @@ async function serveStatic(req, res, pathname) {
   const requestedPath = decodeURIComponent(pathname);
   const relativePath = requestedPath === "/" ? "index.html" : requestedPath.replace(/^\/+/, "");
 
-  if (relativePath === "backend" || relativePath.startsWith("backend/") || relativePath === "backend-client.js") {
+  if (relativePath === "backend" || relativePath.startsWith("backend/")) {
     sendError(req, res, 404, "Archivo no encontrado.");
     return;
   }
@@ -741,7 +1143,6 @@ async function serveStatic(req, res, pathname) {
 
     if (path.basename(filePath) === "index.html") {
       let html = fileBuffer.toString("utf8");
-      html = html.replace(/\s*<script src="backend-client\.js"><\/script>/, "");
       if (!html.includes("security-upgrade.js")) {
         html = html.replace('<script src="app.js"></script>', '<script src="app.js"></script>\n    <script src="security-upgrade.js"></script>');
       }
@@ -809,9 +1210,27 @@ if (require.main === module) {
 
 module.exports = {
   server,
+  port,
+  host,
   applyWritePolicy,
   changedCollections,
   preserveProtectedState,
   stripSensitiveState,
-  applySystemUserAuth
+  applySystemUserAuth,
+  // Reutilizados por las capas de Hacienda para no autenticarse por HTTP
+  // contra su propio proceso.
+  ensureState,
+  readState,
+  sessionFromRequest,
+  sessionFromQuery,
+  sessionUserFromState,
+  isSuperUser,
+  isFullAccessUser,
+  hashPassword,
+  hashPasswordModern,
+  verifyPassword,
+  stateRevision,
+  stampRevision,
+  bootstrapState,
+  referencedImageIds
 };
