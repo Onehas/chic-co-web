@@ -300,23 +300,23 @@
     const style = document.createElement("style");
     style.id = "haciendaPhase5Styles";
     style.textContent = `
-      .hacienda-phase5-panel { display: grid; gap: 14px; padding: 16px; background: rgba(255, 255, 255, 0.78); border: 1px solid rgba(31, 34, 31, 0.08); border-radius: 8px; box-shadow: 0 12px 32px rgba(25, 28, 24, 0.07); }
+      .hacienda-phase5-panel { display: grid; gap: 14px; padding: 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow-2); }
       .hacienda-phase5-heading, .hacienda-phase5-actions, .hacienda-phase5-summary { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
       .hacienda-phase5-heading { justify-content: space-between; }
       .hacienda-phase5-heading div { display: grid; gap: 4px; }
       .hacienda-phase5-heading span, .hacienda-phase5-grid small { color: rgba(41, 49, 49, 0.62); font-size: 12px; font-weight: 800; }
-      .hacienda-phase5-heading strong { color: #252928; font-size: 20px; }
+      .hacienda-phase5-heading strong { color: var(--ink); font-size: 20px; }
       .hacienda-phase5-form { display: grid; grid-template-columns: minmax(260px, 1fr) auto; gap: 12px; align-items: end; }
-      .hacienda-phase5-signed textarea { min-height: 130px; width: 100%; padding: 12px; color: #1d2423; background: rgba(255, 255, 255, 0.86); border: 1px solid rgba(31, 34, 31, 0.14); border-radius: 8px; font: 12px/1.45 Consolas, Monaco, monospace; resize: vertical; }
-      .hacienda-phase5-result { display: grid; gap: 12px; min-height: 54px; color: #25302e; font-size: 13px; font-weight: 800; }
+      .hacienda-phase5-signed textarea { min-height: 130px; width: 100%; padding: 12px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; font: 12px/1.45 Consolas, Monaco, monospace; resize: vertical; }
+      .hacienda-phase5-result { display: grid; gap: 12px; min-height: 54px; color: var(--ink); font-size: 13px; font-weight: 800; }
       .hacienda-phase5-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
       .hacienda-phase5-grid div { display: grid; gap: 4px; padding: 12px; background: rgba(220, 234, 231, 0.32); border-radius: 8px; }
-      .hacienda-phase5-grid strong { overflow-wrap: anywhere; color: #252928; font-size: 12px; }
+      .hacienda-phase5-grid strong { overflow-wrap: anywhere; color: var(--ink); font-size: 12px; }
       .hacienda-phase5-requirements { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-      .hacienda-phase5-requirement { display: grid; gap: 4px; padding: 10px 12px; border-radius: 8px; background: rgba(220, 234, 231, 0.5); color: #183d38; }
+      .hacienda-phase5-requirement { display: grid; gap: 4px; padding: 10px 12px; border-radius: 8px; background: var(--ok-soft); color: var(--ok); }
       .hacienda-phase5-requirement span { font-size: 12px; font-weight: 800; opacity: 0.78; }
-      .hacienda-phase5-requirement.is-warning { background: rgba(221, 209, 184, 0.48); color: #6f4f20; }
-      .hacienda-phase5-requirement.is-error, .hacienda-badge.is-error { background: rgba(255, 220, 214, 0.72); color: #7e2d23; }
+      .hacienda-phase5-requirement.is-warning { background: var(--warn-soft); color: var(--warn); }
+      .hacienda-phase5-requirement.is-error, .hacienda-badge.is-error { background: var(--crit-soft); color: var(--crit); }
       .hacienda-phase5-table { min-width: 760px; }
       @media (max-width: 980px) { .hacienda-phase5-form, .hacienda-phase5-grid, .hacienda-phase5-requirements { grid-template-columns: 1fr; } .hacienda-phase5-actions button { width: 100%; } }
     `;

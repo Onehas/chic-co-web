@@ -96,131 +96,253 @@
     }));
   }
 
-  function renderAppointmentAgenda() {
-    const selectedDay = selectedAgendaDate || todayISO();
-    const selectedDate = new Date(`${selectedDay}T00:00:00`);
-    const scheduleCounts = {};
-    const addCount = (dateValue) => {
+  function addDays(dateValue, amount) {
+    const date = new Date(`${dateValue || todayISO()}T00:00:00`);
+    date.setDate(date.getDate() + amount);
+    return dateToISO(date);
+  }
+
+  // Lunes de la semana a la que pertenece la fecha.
+  function weekStart(dateValue) {
+    const date = new Date(`${dateValue || todayISO()}T00:00:00`);
+    const weekday = (date.getDay() + 6) % 7;
+    date.setDate(date.getDate() - weekday);
+    return dateToISO(date);
+  }
+
+  function longDate(dayISO) {
+    const date = new Date(`${dayISO}T00:00:00`);
+    return `${weekdayNames[date.getDay()]} ${date.getDate()} de ${monthNames[date.getMonth()].toLowerCase()}`;
+  }
+
+  function plural(count, singular, pluralForm) {
+    return `${count} ${count === 1 ? singular : pluralForm}`;
+  }
+
+  const statusTone = {
+    Pendiente: "pendiente",
+    Confirmada: "confirmada",
+    "En curso": "curso",
+    Atendida: "atendida",
+    Cancelada: "cancelada"
+  };
+
+  // Cuenta lo que hay agendado cada dia: citas abiertas, sesiones en curso
+  // con proxima fecha y planes con proxima sesion.
+  function scheduleCountByDay() {
+    const counts = {};
+    const add = (dateValue) => {
       if (!dateValue) return;
-      scheduleCounts[dateValue] = (scheduleCounts[dateValue] || 0) + 1;
+      counts[dateValue] = (counts[dateValue] || 0) + 1;
     };
+    state.appointments.filter(isOpenAppointment).forEach((appointment) => add(appointment.date));
+    state.activeProcedures.forEach((procedure) => add(procedure.next));
+    state.plans.forEach((plan) => add(plan.next));
+    return counts;
+  }
 
-    state.appointments.filter(isOpenAppointment).forEach((appointment) => addCount(appointment.date));
-    state.activeProcedures.forEach((procedure) => addCount(procedure.next));
-    state.plans.forEach((plan) => addCount(plan.next));
+  function renderWeekStrip(selectedDay) {
+    const counts = scheduleCountByDay();
+    const today = todayISO();
+    const monday = weekStart(selectedDay);
 
-    const days = agendaMonthDays(selectedDate)
-      .map(({ date, inMonth }) => {
-        const dayISO = dateToISO(date);
-        const count = scheduleCounts[dayISO] || 0;
-        const className = [
-          "agenda-day",
-          inMonth ? "" : "is-muted",
-          dayISO === selectedDay ? "is-selected" : "",
-          count ? "has-appointments" : ""
-        ]
-          .filter(Boolean)
-          .join(" ");
-        return `<button class="${className}" type="button" data-agenda-date="${escapeHtml(dayISO)}" aria-pressed="${
-          dayISO === selectedDay
-        }"><span>${escapeHtml(date.getDate())}</span>${count ? `<small>${escapeHtml(count)}</small>` : ""}</button>`;
-      })
-      .join("");
+    return Array.from({ length: 7 }, (unused, index) => {
+      const dayISO = addDays(monday, index);
+      const date = new Date(`${dayISO}T00:00:00`);
+      const count = counts[dayISO] || 0;
+      const className = [
+        "agenda-day-chip",
+        dayISO === selectedDay ? "is-selected" : "",
+        dayISO === today ? "is-today" : ""
+      ]
+        .filter(Boolean)
+        .join(" ");
+      return `
+        <button class="${className}" type="button" data-agenda-date="${escapeHtml(dayISO)}" aria-pressed="${
+        dayISO === selectedDay
+      }">
+          <span class="agenda-day-name">${escapeHtml(weekdayShortNames[date.getDay()])}</span>
+          <span class="agenda-day-number">${escapeHtml(date.getDate())}</span>
+          <span class="agenda-day-count">${count ? escapeHtml(plural(count, "cita", "citas")) : "libre"}</span>
+        </button>
+      `;
+    }).join("");
+  }
 
-    const selectedAppointments = appointmentsForDay(selectedDay);
-    const timelineItems = selectedAppointments.length
-      ? selectedAppointments
-          .map(
-            (appointment) => `
-              <article class="agenda-event-card">
-                <div>
-                  <strong>${escapeHtml(appointment.time)} - ${escapeHtml(appointmentEnd(appointment))}</strong>
-                  <span>${escapeHtml(clientName(appointment.clientId))} | ${escapeHtml(procedureName(appointment.procedureId))}</span>
-                  <small>${escapeHtml(appointment.specialist)}${appointment.notes ? ` | ${escapeHtml(appointment.notes)}` : ""}</small>
-                </div>
-                ${statusBadge(appointment.status)}
-              </article>
-            `
-          )
-          .join("")
-      : `<div class="empty-state">No hay citas registradas para este dia.</div>`;
+  // La rejilla del dia: una columna por especialista, una fila cada media
+  // hora. Sustituye a los tres bloques que habia antes -rejilla del mes,
+  // lista del dia y muro de fichas de horario-, que obligaban a mirar en
+  // tres sitios distintos para responder a "quien esta libre a las 3".
+  function renderDayGrid(selectedDay, specialists) {
+    const rowCount = Math.ceil((dayEnd - dayStart) / slotStep);
+    const dayAppointments = appointmentsForDay(selectedDay);
+    const byIndex = new Map(specialists.map((specialist, index) => [normalize(specialist.name), index]));
 
-    const agendaSpecialists = typeof currentBranchSpecialists === "function" ? currentBranchSpecialists() : procedureSpecialists;
-    const availability = agendaSpecialists
-      .map((specialist) => {
-        const booked = selectedAppointments.filter(
-          (appointment) => normalize(appointment.specialist) === normalize(specialist.name) && isOpenAppointment(appointment)
-        );
-        const slots = slotStates(selectedDay, specialist.name, 60);
+    const heads = specialists
+      .map((specialist, index) => {
+        const count = dayAppointments.filter(
+          (appointment) => byIndex.get(normalize(appointment.specialist)) === index && isOpenAppointment(appointment)
+        ).length;
         return `
-          <article class="agenda-availability-card">
-            <div>
-              <strong>${escapeHtml(specialist.name)}</strong>
-              <span>${escapeHtml(specialist.focus)} | ${escapeHtml(booked.length)} citas</span>
-            </div>
-            <div class="agenda-slot-row">
-              ${
-                slots.length
-                  ? slots
-                      .map(
-                        (slot) =>
-                          `<button class="${slot.busy ? "is-busy" : "is-free"}" type="button" data-agenda-slot="${escapeHtml(
-                            slot.time
-                          )}" data-agenda-specialist="${escapeHtml(
-                            specialist.name
-                          )}" ${slot.busy ? 'disabled aria-disabled="true" title="Horario ocupado"' : ""}>${escapeHtml(
-                            slot.time
-                          )}</button>`
-                      )
-                      .join("")
-                  : `<span class="agenda-full">Sin cupos</span>`
-              }
-            </div>
-          </article>
+          <div class="agenda-grid-head" style="grid-column: ${index + 2}; grid-row: 1;">
+            <strong>${escapeHtml(specialist.name)}</strong>
+            <span>${count ? escapeHtml(plural(count, "cita", "citas")) : "sin citas"}</span>
+          </div>
         `;
       })
       .join("");
 
-    const selectedTitle = `${weekdayNames[selectedDate.getDay()]}, ${selectedDate.getDate()} de ${monthNames[
-      selectedDate.getMonth()
-    ].toLowerCase()}`;
-    const monthTitle = `${monthNames[selectedDate.getMonth()]} ${selectedDate.getFullYear()}`;
+    const hours = Array.from({ length: rowCount }, (unused, row) => {
+      const minutes = dayStart + row * slotStep;
+      const onTheHour = minutes % 60 === 0;
+      return `<div class="agenda-grid-time${onTheHour ? " is-hour" : ""}" style="grid-row: ${row + 2};">${
+        onTheHour ? escapeHtml(toTime(minutes)) : ""
+      }</div>`;
+    }).join("");
+
+    // Se marca cada media hora ocupada para no dibujar un hueco libre
+    // encima de una cita en curso.
+    const occupied = specialists.map(() => new Set());
+    const blocks = [];
+    const unplaced = [];
+
+    dayAppointments.forEach((appointment) => {
+      const column = byIndex.get(normalize(appointment.specialist));
+      const startMinutes = toMinutes(appointment.time);
+      const duration = appointmentDuration(appointment);
+      const row = Math.round((startMinutes - dayStart) / slotStep);
+      const span = Math.max(1, Math.round(duration / slotStep));
+
+      if (column === undefined || row < 0 || row >= rowCount) {
+        unplaced.push(appointment);
+        return;
+      }
+
+      for (let offset = 0; offset < span && row + offset < rowCount; offset += 1) {
+        occupied[column].add(row + offset);
+      }
+
+      const tone = statusTone[appointment.status] || "pendiente";
+      blocks.push(`
+        <button
+          class="agenda-block is-${tone}"
+          type="button"
+          data-agenda-appointment="${escapeHtml(appointment.id)}"
+          style="grid-column: ${column + 2}; grid-row: ${row + 2} / span ${Math.min(span, rowCount - row)};"
+          title="${escapeHtml(`${appointment.time}-${appointmentEnd(appointment)} · ${clientName(appointment.clientId)} · ${appointment.status}`)}"
+        >
+          <span class="agenda-block-time">${escapeHtml(appointment.time)} - ${escapeHtml(appointmentEnd(appointment))}</span>
+          <span class="agenda-block-client">${escapeHtml(clientName(appointment.clientId))}</span>
+          <span class="agenda-block-service">${escapeHtml(procedureName(appointment.procedureId))}</span>
+        </button>
+      `);
+    });
+
+    const freeCells = specialists
+      .map((specialist, column) =>
+        Array.from({ length: rowCount }, (unused, row) => {
+          if (occupied[column].has(row)) return "";
+          const time = toTime(dayStart + row * slotStep);
+          return `
+            <button
+              class="agenda-free"
+              type="button"
+              data-agenda-slot="${escapeHtml(time)}"
+              data-agenda-specialist="${escapeHtml(specialist.name)}"
+              style="grid-column: ${column + 2}; grid-row: ${row + 2};"
+              aria-label="${escapeHtml(`Agendar a las ${time} con ${specialist.name}`)}"
+            ><span aria-hidden="true">+</span></button>
+          `;
+        }).join("")
+      )
+      .join("");
+
+    const leftovers = unplaced.length
+      ? `
+        <div class="agenda-unplaced">
+          <strong>Fuera de la rejilla</strong>
+          <span>Horario o especialista que ya no esta en la lista de la sucursal.</span>
+          <div class="agenda-unplaced-list">
+            ${unplaced
+              .map(
+                (appointment) => `
+                  <button class="agenda-unplaced-item" type="button" data-agenda-appointment="${escapeHtml(appointment.id)}">
+                    <strong>${escapeHtml(appointment.time)}</strong>
+                    <span>${escapeHtml(clientName(appointment.clientId))} · ${escapeHtml(appointment.specialist || "Sin especialista")}</span>
+                    ${statusBadge(appointment.status)}
+                  </button>
+                `
+              )
+              .join("")}
+          </div>
+        </div>
+      `
+      : "";
+
+    if (!specialists.length) {
+      return `<div class="empty-state">Esta sucursal no tiene especialistas registrados.</div>${leftovers}`;
+    }
 
     return `
-      <div class="agenda-board agenda-board-upgraded">
-        <section class="agenda-calendar" aria-label="Calendario de citas">
-          <div class="agenda-calendar-top">
-            <strong>${escapeHtml(selectedTitle)}</strong>
-            <button class="agenda-today-button" type="button" data-agenda-today>Hoy</button>
-          </div>
-          <div class="agenda-month-row">
-            <h4>${escapeHtml(monthTitle)}</h4>
-            <div class="agenda-month-controls">
-              <button type="button" data-agenda-shift="-1" aria-label="Mes anterior">^</button>
-              <button type="button" data-agenda-shift="1" aria-label="Mes siguiente">v</button>
-            </div>
-          </div>
-          <div class="agenda-weekdays">
-            ${weekdayShortNames.map((day) => `<span>${escapeHtml(day)}</span>`).join("")}
-          </div>
-          <div class="agenda-days">${days}</div>
-        </section>
-
-        <section class="agenda-day-panel">
-          <div class="agenda-today-head">
-            <strong>Agenda del dia</strong>
-            <span>${escapeHtml(selectedAppointments.length)} citas | ${escapeHtml(selectedDay)}</span>
-          </div>
-          <div class="agenda-timeline">${timelineItems}</div>
-        </section>
-      </div>
-
-      <section class="agenda-availability">
-        <div class="agenda-today-head">
-          <strong>Disponibilidad por especialista</strong>
-          <span>${escapeHtml(agendaSpecialists.length)} personas | cupos de 60 mins</span>
+      <div class="agenda-grid-scroll">
+        <div
+          class="agenda-grid"
+          style="grid-template-columns: 58px repeat(${specialists.length}, minmax(148px, 1fr)); grid-template-rows: auto repeat(${rowCount}, 32px);"
+        >
+          <div class="agenda-grid-corner" style="grid-column: 1; grid-row: 1;"></div>
+          ${heads}
+          ${hours}
+          ${freeCells}
+          ${blocks.join("")}
         </div>
-        <div class="agenda-availability-grid">${availability}</div>
+      </div>
+      ${leftovers}
+    `;
+  }
+
+  function renderAppointmentAgenda() {
+    const selectedDay = selectedAgendaDate || todayISO();
+    const specialists = typeof currentBranchSpecialists === "function" ? currentBranchSpecialists() : procedureSpecialists;
+    const openCount = appointmentsForDay(selectedDay).filter(isOpenAppointment).length;
+
+    return `
+      <section class="agenda" aria-label="Agenda del dia">
+        <header class="agenda-bar">
+          <div class="agenda-nav">
+            <button class="agenda-step" type="button" data-agenda-shift="-1" aria-label="Dia anterior">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" /></svg>
+            </button>
+            <button class="agenda-step" type="button" data-agenda-shift="1" aria-label="Dia siguiente">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" /></svg>
+            </button>
+          </div>
+
+          <div class="agenda-heading">
+            <strong>${escapeHtml(longDate(selectedDay))}</strong>
+            <span>${escapeHtml(openCount ? plural(openCount, "cita activa", "citas activas") : "Sin citas activas")}</span>
+          </div>
+
+          <div class="agenda-bar-actions">
+            <label class="agenda-jump">
+              <span class="visually-hidden">Ir a una fecha</span>
+              <input type="date" value="${escapeHtml(selectedDay)}" data-agenda-jump />
+            </label>
+            <button class="secondary-action" type="button" data-agenda-today>Hoy</button>
+          </div>
+        </header>
+
+        <div class="agenda-week">${renderWeekStrip(selectedDay)}</div>
+
+        ${renderDayGrid(selectedDay, specialists)}
+
+        <footer class="agenda-legend">
+          <span><i class="is-pendiente"></i>Pendiente</span>
+          <span><i class="is-confirmada"></i>Confirmada</span>
+          <span><i class="is-curso"></i>En curso</span>
+          <span><i class="is-atendida"></i>Atendida</span>
+          <span><i class="is-cancelada"></i>Cancelada</span>
+          <span class="agenda-legend-hint">Toque un hueco libre para agendar ahi.</span>
+        </footer>
       </section>
     `;
   }
@@ -261,6 +383,35 @@
     persistAndRender("Cita guardada en agenda");
   };
 
+  // Solo los pasos que tienen sentido desde el estado actual. Antes se
+  // mostraban los cuatro siempre: en una cita ya cancelada, "Confirmar" e
+  // "Iniciar" seguian ahi, y una fila con cuatro botones repetida veinte
+  // veces era la mitad del ruido de la pantalla.
+  const nextActions = {
+    Pendiente: [
+      ["data-confirm-appointment", "Confirmar", ""],
+      ["data-cancel-appointment", "Cancelar", " is-muted"]
+    ],
+    Confirmada: [
+      ["data-start-appointment", "Iniciar", ""],
+      ["data-cancel-appointment", "Cancelar", " is-muted"]
+    ],
+    "En curso": [["data-complete-appointment", "Marcar atendida", ""]],
+    Atendida: [],
+    Cancelada: [["data-confirm-appointment", "Reactivar", " is-muted"]]
+  };
+
+  function appointmentActions(appointment) {
+    const actions = nextActions[appointment.status] || nextActions.Pendiente;
+    if (!actions.length) return '<span class="muted-cell">Cerrada</span>';
+    return actions
+      .map(
+        ([attribute, label, extra]) =>
+          `<button class="row-action${extra}" type="button" ${attribute}="${escapeHtml(appointment.id)}">${escapeHtml(label)}</button>`
+      )
+      .join("");
+  }
+
   viewRenderers.citas = function (search) {
     const selectedClient = prefill.clientId || state.clients[0]?.id || "";
     const selectedProcedure = prefill.procedureId || state.procedures[0]?.id || "";
@@ -288,7 +439,7 @@
       .sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`))
       .map(
         (appointment) => `
-          <tr>
+          <tr data-appointment-row="${escapeHtml(appointment.id)}">
             <td>
               <div class="cell-title">
                 <strong>${escapeHtml(clientName(appointment.clientId))}</strong>
@@ -300,12 +451,7 @@
             <td>${statusBadge(appointment.status)}</td>
             <td>${escapeHtml(appointment.notes || "Sin notas")}</td>
             <td>
-              <div class="inline-actions">
-                <button class="row-action" type="button" data-confirm-appointment="${appointment.id}">Confirmar</button>
-                <button class="row-action is-muted" type="button" data-start-appointment="${appointment.id}">Iniciar</button>
-                <button class="row-action is-warning" type="button" data-complete-appointment="${appointment.id}">Atendida</button>
-                <button class="row-action is-muted" type="button" data-cancel-appointment="${appointment.id}">Cancelar</button>
-              </div>
+              <div class="inline-actions">${appointmentActions(appointment)}</div>
             </td>
           </tr>
         `
@@ -337,6 +483,13 @@
   };
 
   function fillAgendaSlot(button) {
+    // El formulario vive en el panel lateral desde el rediseno. Si esta
+    // cerrado hay que abrirlo, o el horario se cargaria en un formulario
+    // que nadie ve.
+    if (typeof openDrawer === "function" && !document.body.classList.contains("drawer-open")) {
+      openDrawer(button);
+    }
+
     const form = document.querySelector(".agenda-form");
     if (!form) return;
     const timeInput = form.querySelector('[name="time"]');
@@ -345,7 +498,17 @@
     if (timeInput) timeInput.value = button.dataset.agendaSlot;
     if (specialistInput) specialistInput.value = button.dataset.agendaSpecialist;
     if (dateInput) dateInput.value = selectedAgendaDate || todayISO();
-    form.scrollIntoView({ behavior: "smooth", block: "center" });
+    form.querySelector('[name="clientId"]')?.focus();
+  }
+
+  function highlightAppointmentRow(appointmentId) {
+    const row = document.querySelector(`tr[data-appointment-row="${appointmentId}"]`);
+    if (!row) return;
+    document.querySelectorAll("[data-appointment-row].is-highlighted").forEach((item) => {
+      item.classList.remove("is-highlighted");
+    });
+    row.classList.add("is-highlighted");
+    row.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 
   document.addEventListener(
@@ -353,13 +516,31 @@
     (event) => {
       const shiftButton = event.target.closest("[data-agenda-shift]");
       const todayButton = event.target.closest("[data-agenda-today]");
+      const dateButton = event.target.closest("[data-agenda-date]");
       const slotButton = event.target.closest("[data-agenda-slot]");
+      const blockButton = event.target.closest("[data-agenda-appointment]");
       const cancelButton = event.target.closest("[data-cancel-appointment]");
 
       if (shiftButton) {
         event.preventDefault();
-        selectedAgendaDate = addMonths(selectedAgendaDate || todayISO(), Number(shiftButton.dataset.agendaShift));
+        selectedAgendaDate = addDays(selectedAgendaDate || todayISO(), Number(shiftButton.dataset.agendaShift));
         renderView();
+        return;
+      }
+
+      if (dateButton) {
+        event.preventDefault();
+        selectedAgendaDate = dateButton.dataset.agendaDate;
+        renderView();
+        return;
+      }
+
+      // Al tocar una cita se resalta su fila en la tabla de abajo, que es
+      // donde viven las acciones. Asi la rejilla explica y la tabla opera,
+      // en vez de repetir los mismos botones en dos sitios.
+      if (blockButton) {
+        event.preventDefault();
+        highlightAppointmentRow(blockButton.dataset.agendaAppointment);
         return;
       }
 
@@ -386,6 +567,13 @@
   );
 
   document.addEventListener("change", (event) => {
+    const jumpInput = event.target.closest("[data-agenda-jump]");
+    if (jumpInput?.value) {
+      selectedAgendaDate = jumpInput.value;
+      renderView();
+      return;
+    }
+
     const procedureInput = event.target.closest('.agenda-form [name="procedureId"]');
     if (!procedureInput) return;
     const form = procedureInput.closest(".agenda-form");
@@ -394,138 +582,385 @@
     if (durationInput && procedure?.duration) durationInput.value = procedure.duration;
   });
 
+  // Este bloque se inyecta despues de styles.css, asi que gana el desempate
+  // por orden. Todo lo de aqui usa tokens: de lo contrario el tema oscuro
+  // -que solo vive en styles.css- no llegaria nunca a la agenda.
   const style = document.createElement("style");
   style.textContent = `
-    .agenda-board-upgraded {
-      grid-template-columns: minmax(320px, 420px) minmax(320px, 1fr);
-    }
-
-    .agenda-month-controls {
-      display: inline-flex;
-      gap: 8px;
-    }
-
-    .agenda-month-controls button,
-    .agenda-today-button,
-    .agenda-slot-row button {
-      min-height: 28px;
-      border: 1px solid rgba(255, 255, 255, 0.14);
-      color: #fff;
-      background: rgba(255, 255, 255, 0.1);
-      border-radius: var(--radius);
-      font-size: 12px;
-      font-weight: 900;
-    }
-
-    .agenda-month-controls button {
-      min-width: 34px;
-    }
-
-    .agenda-today-button {
-      padding: 0 10px;
-    }
-
-    .agenda-day-panel,
-    .agenda-availability {
+    .agenda {
       display: grid;
       gap: 12px;
+      margin-bottom: 14px;
       padding: 14px;
-      border: 1px solid rgba(36, 49, 50, 0.08);
-      background: #fff;
+      background: var(--surface);
+      border: 1px solid var(--line);
       border-radius: var(--radius);
     }
 
-    .agenda-timeline,
-    .agenda-availability-grid {
-      display: grid;
-      gap: 8px;
-      max-height: 430px;
-      overflow: auto;
-      padding-right: 2px;
-    }
-
-    .agenda-event-card,
-    .agenda-availability-card {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      min-width: 0;
-      padding: 10px;
-      border: 1px solid rgba(36, 49, 50, 0.07);
-      background: #f7faf9;
-      border-radius: var(--radius);
-    }
-
-    .agenda-event-card div,
-    .agenda-availability-card div:first-child {
-      display: grid;
-      gap: 3px;
-      min-width: 0;
-    }
-
-    .agenda-event-card strong,
-    .agenda-availability-card strong {
-      color: var(--ink);
-      font-size: 13px;
-    }
-
-    .agenda-event-card span,
-    .agenda-event-card small,
-    .agenda-availability-card span,
-    .muted-cell {
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.25;
-    }
-
-    .agenda-availability {
-      margin-top: 12px;
-    }
-
-    .agenda-availability-grid {
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      max-height: 520px;
-    }
-
-    .agenda-slot-row {
+    .agenda-bar {
       display: flex;
       flex-wrap: wrap;
-      justify-content: flex-end;
-      gap: 6px;
-      max-height: 142px;
-      overflow: auto;
+      align-items: center;
+      gap: 10px;
     }
 
-    .agenda-slot-row button {
-      min-height: 26px;
-      min-width: 58px;
+    .agenda-nav {
+      display: inline-flex;
+      gap: 4px;
+    }
+
+    .agenda-step {
+      display: grid;
+      place-items: center;
+      width: 32px;
+      height: 32px;
+      color: var(--ink-2);
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      transition: background 150ms ease, color 150ms ease, transform 140ms var(--ease-out);
+    }
+
+    .agenda-step svg {
+      width: 16px;
+      height: 16px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.9;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .agenda-step:active,
+    .agenda-day-chip:active {
+      transform: scale(0.96);
+    }
+
+    .agenda-heading {
+      display: grid;
+      flex: 1 1 200px;
+      gap: 1px;
+      min-width: 0;
+    }
+
+    .agenda-heading strong {
+      color: var(--ink);
+      font-size: 16px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+
+    .agenda-heading span {
+      color: var(--ink-3);
+      font-size: 12.5px;
+    }
+
+    .agenda-bar-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .agenda-jump input {
+      height: 32px;
       padding: 0 8px;
-      opacity: 1;
+      color: var(--ink-2);
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      font-size: 12.5px;
     }
 
-    .agenda-slot-row button.is-free {
-      color: #315657;
-      background: var(--mint-soft);
-      border-color: rgba(95, 137, 134, 0.18);
+    .agenda-week {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 6px;
     }
 
-    .agenda-slot-row button.is-busy {
-      color: #8d1e16;
-      background: #ffe0dc;
-      border-color: rgba(180, 47, 36, 0.34);
-      cursor: not-allowed;
+    .agenda-day-chip {
+      display: grid;
+      gap: 1px;
+      padding: 7px 4px;
+      color: var(--ink-2);
+      background: var(--surface-2);
+      border: 1px solid transparent;
+      border-radius: var(--radius-sm);
+      text-align: center;
+      transition: background 150ms ease, color 150ms ease, transform 140ms var(--ease-out);
     }
 
-    .agenda-full {
-      color: var(--rose);
+    .agenda-day-name {
+      color: var(--ink-3);
+      font-size: 10.5px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .agenda-day-number {
+      font-size: 17px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+
+    .agenda-day-count {
+      color: var(--ink-3);
+      font-size: 11px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .agenda-day-chip.is-today {
+      border-color: var(--line-strong);
+    }
+
+    .agenda-day-chip.is-selected {
+      color: var(--on-brand);
+      background: var(--brand);
+      border-color: var(--brand);
+    }
+
+    .agenda-day-chip.is-selected .agenda-day-name,
+    .agenda-day-chip.is-selected .agenda-day-count {
+      color: inherit;
+      opacity: 0.72;
+    }
+
+    .agenda-grid-scroll {
+      overflow-x: auto;
+      overscroll-behavior-x: contain;
+    }
+
+    .agenda-grid {
+      display: grid;
+      min-width: 100%;
+      background: var(--surface);
+    }
+
+    .agenda-grid-corner,
+    .agenda-grid-head {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: var(--surface);
+      border-bottom: 1px solid var(--line-strong);
+    }
+
+    .agenda-grid-head {
+      display: grid;
+      gap: 1px;
+      padding: 6px 8px;
+      min-width: 0;
+    }
+
+    .agenda-grid-head strong {
+      color: var(--ink);
+      font-size: 12.5px;
+      font-weight: 600;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .agenda-grid-head span {
+      color: var(--ink-3);
+      font-size: 11px;
+    }
+
+    .agenda-grid-time {
+      padding-right: 8px;
+      color: var(--ink-3);
+      border-top: 1px solid transparent;
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+      text-align: right;
+    }
+
+    .agenda-grid-time.is-hour {
+      border-top-color: var(--line);
+      color: var(--ink-2);
+    }
+
+    .agenda-free {
+      margin: 1px;
+      color: transparent;
+      background: var(--surface-2);
+      border: 1px solid transparent;
+      border-radius: var(--radius-sm);
+      font-size: 15px;
+      line-height: 1;
+      transition: background 130ms ease, color 130ms ease;
+    }
+
+    @media (hover: hover) and (pointer: fine) {
+      .agenda-free:hover {
+        color: var(--ink-2);
+        background: var(--surface-3);
+      }
+
+      .agenda-step:hover,
+      .agenda-day-chip:hover:not(.is-selected) {
+        color: var(--ink);
+        background: var(--surface-3);
+      }
+    }
+
+    .agenda-free:focus-visible {
+      color: var(--ink-2);
+    }
+
+    .agenda-block {
+      display: grid;
+      align-content: start;
+      gap: 1px;
+      margin: 1px;
+      padding: 5px 8px;
+      min-width: 0;
+      overflow: hidden;
+      color: var(--ink);
+      background: var(--surface-2);
+      border: 1px solid var(--line);
+      border-left: 3px solid var(--ink-3);
+      border-radius: var(--radius-sm);
+      text-align: left;
+      transition: transform 140ms var(--ease-out), box-shadow 140ms ease;
+    }
+
+    .agenda-block:active {
+      transform: scale(0.985);
+    }
+
+    @media (hover: hover) and (pointer: fine) {
+      .agenda-block:hover {
+        box-shadow: var(--shadow-2);
+      }
+    }
+
+    .agenda-block-time {
+      color: var(--ink-3);
+      font-size: 10.5px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .agenda-block-client {
+      font-size: 12.5px;
+      font-weight: 600;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .agenda-block-service {
+      color: var(--ink-3);
+      font-size: 11px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .agenda-block.is-pendiente { border-left-color: var(--warn); background: var(--warn-soft); }
+    .agenda-block.is-confirmada { border-left-color: var(--accent); background: var(--accent-soft); }
+    .agenda-block.is-curso { border-left-color: var(--ok); background: var(--ok-soft); }
+    .agenda-block.is-atendida { border-left-color: var(--line-strong); background: var(--surface-2); }
+    .agenda-block.is-cancelada { border-left-color: var(--crit); background: var(--crit-soft); }
+
+    .agenda-block.is-cancelada .agenda-block-client {
+      text-decoration: line-through;
+    }
+
+    .agenda-legend {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px 14px;
+      color: var(--ink-3);
+      font-size: 11.5px;
+    }
+
+    .agenda-legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .agenda-legend i {
+      width: 10px;
+      height: 10px;
+      border-radius: 3px;
+      border-left: 3px solid var(--ink-3);
+      background: var(--surface-2);
+    }
+
+    .agenda-legend i.is-pendiente { border-left-color: var(--warn); background: var(--warn-soft); }
+    .agenda-legend i.is-confirmada { border-left-color: var(--accent); background: var(--accent-soft); }
+    .agenda-legend i.is-curso { border-left-color: var(--ok); background: var(--ok-soft); }
+    .agenda-legend i.is-atendida { border-left-color: var(--line-strong); }
+    .agenda-legend i.is-cancelada { border-left-color: var(--crit); background: var(--crit-soft); }
+
+    .agenda-legend-hint {
+      margin-left: auto;
+    }
+
+    .agenda-unplaced {
+      display: grid;
+      gap: 8px;
+      padding: 10px;
+      background: var(--warn-soft);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+    }
+
+    .agenda-unplaced > strong {
+      color: var(--ink);
+      font-size: 12.5px;
+    }
+
+    .agenda-unplaced > span {
+      color: var(--ink-2);
+      font-size: 11.5px;
+    }
+
+    .agenda-unplaced-list {
+      display: grid;
+      gap: 6px;
+    }
+
+    .agenda-unplaced-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 7px 9px;
+      color: var(--ink);
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      text-align: left;
+    }
+
+    .agenda-unplaced-item span {
+      flex: 1 1 auto;
+      color: var(--ink-2);
       font-size: 12px;
-      font-weight: 900;
+      min-width: 0;
     }
 
-    @media (max-width: 860px) {
-      .agenda-board-upgraded {
-        grid-template-columns: 1fr;
+    tr[data-appointment-row].is-highlighted > td {
+      background: var(--accent-soft);
+    }
+
+    .muted-cell {
+      color: var(--ink-3);
+      font-size: 12px;
+    }
+
+    @media (max-width: 720px) {
+      .agenda-legend-hint {
+        margin-left: 0;
+      }
+
+      .agenda-day-count {
+        display: none;
       }
     }
   `;

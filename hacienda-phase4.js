@@ -211,22 +211,22 @@
     const style = document.createElement("style");
     style.id = "haciendaPhase4Styles";
     style.textContent = `
-      .hacienda-phase4-panel { display: grid; gap: 14px; padding: 16px; background: rgba(255, 255, 255, 0.74); border: 1px solid rgba(31, 34, 31, 0.08); border-radius: 8px; box-shadow: 0 12px 32px rgba(25, 28, 24, 0.07); }
+      .hacienda-phase4-panel { display: grid; gap: 14px; padding: 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow-2); }
       .hacienda-phase4-heading, .hacienda-phase4-form, .hacienda-phase4-summary { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
       .hacienda-phase4-heading { justify-content: space-between; }
       .hacienda-phase4-heading div { display: grid; gap: 4px; }
       .hacienda-phase4-heading span, .hacienda-phase4-grid small { color: rgba(41, 49, 49, 0.62); font-size: 12px; font-weight: 800; }
-      .hacienda-phase4-heading strong { color: #252928; font-size: 20px; }
+      .hacienda-phase4-heading strong { color: var(--ink); font-size: 20px; }
       .hacienda-phase4-form { display: grid; grid-template-columns: minmax(220px, 1.2fr) minmax(180px, 0.8fr) auto; gap: 12px; align-items: end; }
-      .hacienda-phase4-result { display: grid; gap: 12px; min-height: 54px; color: #25302e; font-size: 13px; font-weight: 800; }
+      .hacienda-phase4-result { display: grid; gap: 12px; min-height: 54px; color: var(--ink); font-size: 13px; font-weight: 800; }
       .hacienda-phase4-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
       .hacienda-phase4-grid div { display: grid; gap: 4px; padding: 12px; background: rgba(220, 234, 231, 0.32); border-radius: 8px; }
-      .hacienda-phase4-grid strong { overflow-wrap: anywhere; color: #252928; font-size: 13px; }
+      .hacienda-phase4-grid strong { overflow-wrap: anywhere; color: var(--ink); font-size: 13px; }
       .hacienda-phase4-findings { display: grid; gap: 8px; }
-      .hacienda-phase4-finding { padding: 10px 12px; border-radius: 8px; background: rgba(220, 234, 231, 0.5); color: #183d38; }
-      .hacienda-phase4-finding.is-warning { background: rgba(221, 209, 184, 0.48); color: #6f4f20; }
-      .hacienda-phase4-finding.is-error, .hacienda-badge.is-error { background: rgba(255, 220, 214, 0.72); color: #7e2d23; }
-      .hacienda-phase4-xml { min-height: 240px; width: 100%; padding: 12px; color: #1d2423; background: rgba(255, 255, 255, 0.85); border: 1px solid rgba(31, 34, 31, 0.12); border-radius: 8px; font: 12px/1.45 Consolas, Monaco, monospace; resize: vertical; }
+      .hacienda-phase4-finding { padding: 10px 12px; border-radius: 8px; background: var(--ok-soft); color: var(--ok); }
+      .hacienda-phase4-finding.is-warning { background: var(--warn-soft); color: var(--warn); }
+      .hacienda-phase4-finding.is-error, .hacienda-badge.is-error { background: var(--crit-soft); color: var(--crit); }
+      .hacienda-phase4-xml { min-height: 240px; width: 100%; padding: 12px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; font: 12px/1.45 Consolas, Monaco, monospace; resize: vertical; }
       @media (max-width: 980px) { .hacienda-phase4-form, .hacienda-phase4-grid { grid-template-columns: 1fr; } .hacienda-phase4-form button { width: 100%; } }
     `;
     document.head.appendChild(style);

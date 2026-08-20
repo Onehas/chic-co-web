@@ -50,6 +50,8 @@ La version online guarda los datos en Postgres y valida el login desde la API. E
 | `CHIC_RECEPCION_PASSWORD_HASH` | Hash inicial de la cuenta de recepcion. |
 | `CHIC_MONICA_PASSWORD_HASH` | Hash inicial de la cuenta de Monica. |
 | `HACIENDA_SECRET_KEY` | Cifra los secretos fiscales. Minimo 24 caracteres. |
+| `TRUST_PROXY_HOPS` | Cuantos proxys propios hay delante. En Render, `1`. Sin ella se usa la conexion real y el limite de intentos de login cuenta por cuenta en vez de por visitante. |
+| `CHIC_MAX_IMAGES` | Tope de fotos de producto guardadas. Por defecto 4000. |
 | `HOST`, `PORT` | Segun lo indique el proveedor. En Render, `HOST=0.0.0.0`. |
 
 En una instalacion nueva, define `CHIC_BOOTSTRAP_EMAIL` y `CHIC_BOOTSTRAP_PASSWORD` antes del primer arranque. Sin ellas el estado inicial se crea igual, pero sin ninguna cuenta capaz de entrar.

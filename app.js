@@ -226,7 +226,7 @@ const moduleConfig = {
     description: "Define servicios, duracion, precio, producto asociado y cuidados posteriores.",
     actions: [
       { label: "Nuevo procedimiento", action: "focusForm" },
-      { label: "Iniciar sesion", module: "enCurso" }
+      { label: "Ver en curso", module: "enCurso" }
     ]
   },
   enCurso: {
@@ -265,8 +265,7 @@ const moduleConfig = {
     title: "Usuarios y permisos",
     description: "Administra usuarios del sistema, funciones y accesos por modulo.",
     actions: [
-      { label: "Nuevo usuario", action: "focusForm" },
-      { label: "Ver permisos", action: "focusForm" }
+      { label: "Nuevo usuario", action: "focusForm" }
     ]
   }
 };
@@ -329,6 +328,15 @@ let prefill = {};
 let selectedAgendaDate = todayISO();
 let toastTimer;
 
+// security-upgrade.js define estas tres, pero carga despues de que este
+// archivo ejecute restoreSession() al final. Sin los sustitutos, la primera
+// recarga con sesion abierta lanzaba `storeStateLocally is not defined` y
+// showApp() se cortaba a la mitad. security-upgrade.js las reasigna al
+// cargar, asi que estos cuerpos vacios solo cubren ese hueco de arranque.
+var storeStateLocally = function () {};
+var connectRealtimeSync = function () {};
+var disconnectRealtimeSync = function () {};
+
 const elements = {
   moduleTitle: document.querySelector("#moduleTitle"),
   moduleDescription: document.querySelector("#moduleDescription"),
@@ -339,14 +347,8 @@ const elements = {
   viewSubtitle: document.querySelector("#viewSubtitle"),
   viewContent: document.querySelector("#viewContent"),
   searchInput: document.querySelector("#searchInput"),
-  resetDataButton: document.querySelector("#resetDataButton"),
-  activeCount: document.querySelector("#activeCount"),
-  activeProcedureList: document.querySelector("#activeProcedureList"),
-  alertCount: document.querySelector("#alertCount"),
-  requestList: document.querySelector("#requestList"),
   dropdownLayer: document.querySelector("#dropdownLayer"),
   toast: document.querySelector("#toast"),
-  operationsPanel: document.querySelector(".operations-panel"),
   reasonModal: document.querySelector("#inventoryReasonModal"),
   reasonForm: document.querySelector("#inventoryReasonForm"),
   reasonProductName: document.querySelector("#reasonProductName"),
@@ -842,7 +844,6 @@ function renderAll() {
   renderActiveUser();
   renderModuleAccess();
   renderSummary();
-  renderSideLists();
   renderView();
 }
 
@@ -939,40 +940,6 @@ function renderSummary() {
     .join("");
 }
 
-function renderSideLists() {
-  const active = activeProcedures();
-  const alerts = lowProducts();
-
-  elements.activeCount.textContent = active.length;
-  elements.activeProcedureList.innerHTML = active.length
-    ? active
-        .slice(0, 5)
-        .map(
-          (item) => `
-            <article class="compact-item">
-              <strong>${escapeHtml(clientName(item.clientId))}</strong>
-              <span>${escapeHtml(procedureName(item.procedureId))} | ${escapeHtml(item.status)} | ${escapeHtml(item.specialist)}</span>
-            </article>
-          `
-        )
-        .join("")
-    : `<div class="empty-state">No hay procedimientos activos.</div>`;
-
-  elements.alertCount.textContent = alerts.length;
-  elements.requestList.innerHTML = alerts.length
-    ? alerts
-        .map(
-          (product) => `
-            <article class="compact-item">
-              <strong>${escapeHtml(product.name)}</strong>
-              <span>Stock ${escapeHtml(product.stock)} de minimo ${escapeHtml(product.min)} ${escapeHtml(product.unit)}</span>
-            </article>
-          `
-        )
-        .join("")
-    : `<div class="empty-state">Inventario dentro del minimo definido.</div>`;
-}
-
 function renderView() {
   if (!canView(currentModule)) {
     currentModule = firstAllowedModule();
@@ -992,13 +959,6 @@ function renderView() {
   // #viewContent justo después de que esta función retorne.
   moveFormToDrawer();
   hydrateProductImages(elements.viewContent);
-}
-
-// Las cifras del módulo ya viven en la cabecera; repetirlas encima de la
-// tabla solo gastaba altura. Se conserva la función porque forma parte de la
-// firma de renderLayout.
-function renderStats() {
-  return "";
 }
 
 // La rejilla mantiene .view-grid > (.form-panel, .records-panel) porque
@@ -1037,9 +997,16 @@ function renderTable(headers, rows) {
   `;
 }
 
+// `required` ya da aria-required al lector de pantalla, pero visualmente no
+// habia forma de saber que campos son obligatorios hasta que el navegador
+// rechazaba el envio. La marca se pinta desde CSS con .is-required.
+function fieldClass(baseClass, extra) {
+  return String(extra || "").includes("required") ? `${baseClass} is-required` : baseClass;
+}
+
 function inputField(label, name, type = "text", value = "", extra = "") {
   return `
-    <label class="field">
+    <label class="${fieldClass("field", extra)}">
       <span>${escapeHtml(label)}</span>
       <input name="${escapeHtml(name)}" type="${escapeHtml(type)}" value="${escapeHtml(value)}" ${extra} />
     </label>
@@ -1057,7 +1024,7 @@ function textareaField(label, name, value = "") {
 
 function selectField(label, name, options, selectedValue = "", extra = "") {
   return `
-    <label class="field">
+    <label class="${fieldClass("field", extra)}">
       <span>${escapeHtml(label)}</span>
       <select name="${escapeHtml(name)}" ${extra}>
         ${options
@@ -1124,158 +1091,6 @@ function statusBadge(status) {
   return `<span class="status-badge ${className}">${escapeHtml(status)}</span>`;
 }
 
-function specialistInitials(name) {
-  return String(name || "")
-    .split(" ")
-    .filter(Boolean)
-    .map((part) => part[0])
-    .slice(0, 2)
-    .join("")
-    .toUpperCase();
-}
-
-function agendaMonthDays(referenceDate) {
-  const year = referenceDate.getFullYear();
-  const month = referenceDate.getMonth();
-  const firstDay = new Date(year, month, 1);
-  const calendarStart = new Date(year, month, 1 - firstDay.getDay());
-  return Array.from({ length: 42 }, (_, index) => {
-    const date = new Date(calendarStart);
-    date.setDate(calendarStart.getDate() + index);
-    return {
-      date,
-      inMonth: date.getMonth() === month
-    };
-  });
-}
-
-function renderAppointmentAgenda() {
-  const selectedDay = selectedAgendaDate || todayISO();
-  const selectedDate = new Date(`${selectedDay}T00:00:00`);
-  const scheduleCounts = {};
-  const addScheduleCount = (dateValue) => {
-    if (!dateValue) return;
-    scheduleCounts[dateValue] = (scheduleCounts[dateValue] || 0) + 1;
-  };
-  state.appointments.forEach((appointment) => addScheduleCount(appointment.date));
-  state.activeProcedures.forEach((procedure) => addScheduleCount(procedure.next));
-  state.plans.forEach((plan) => addScheduleCount(plan.next));
-  const selectedItems = [
-    ...state.appointments
-      .filter((appointment) => appointment.date === selectedDay)
-      .map((appointment) => ({
-        time: appointment.time,
-        type: "Cita",
-        client: clientName(appointment.clientId),
-        detail: procedureName(appointment.procedureId),
-        meta: `${appointment.specialist} | ${appointment.status}`
-      })),
-    ...state.activeProcedures
-      .filter((procedure) => procedure.next === selectedDay)
-      .map((procedure) => ({
-        time: "",
-        type: "Seguimiento",
-        client: clientName(procedure.clientId),
-        detail: procedureName(procedure.procedureId),
-        meta: `${procedure.specialist} | ${procedure.status}`
-      })),
-    ...state.plans
-      .filter((plan) => plan.next === selectedDay)
-      .map((plan) => ({
-        time: "",
-        type: "Plan",
-        client: clientName(plan.clientId),
-        detail: plan.title,
-        meta: procedureName(plan.procedureId)
-      }))
-  ].sort((a, b) => (a.time || "99:99").localeCompare(b.time || "99:99"));
-  const selectedTitle = `${weekdayNames[selectedDate.getDay()]}, ${selectedDate.getDate()} de ${monthNames[
-    selectedDate.getMonth()
-  ].toLowerCase()}`;
-  const monthTitle = `${monthNames[selectedDate.getMonth()]} ${selectedDate.getFullYear()}`;
-  const days = agendaMonthDays(selectedDate)
-    .map(({ date, inMonth }) => {
-      const dayISO = dateToISO(date);
-      const count = scheduleCounts[dayISO] || 0;
-      const className = [
-        "agenda-day",
-        inMonth ? "" : "is-muted",
-        dayISO === selectedDay ? "is-selected" : "",
-        count ? "has-appointments" : ""
-      ]
-        .filter(Boolean)
-        .join(" ");
-      const counter = count ? `<small>${escapeHtml(count)}</small>` : "";
-      return `<button class="${className}" type="button" data-agenda-date="${escapeHtml(dayISO)}" aria-pressed="${
-        dayISO === selectedDay
-      }" aria-label="Ver agenda del ${escapeHtml(dayISO)}"><span>${escapeHtml(date.getDate())}</span>${counter}</button>`;
-    })
-    .join("");
-  const team = procedureSpecialists
-    .map(
-      (specialist) => `
-        <article class="specialist-card">
-          <span class="specialist-avatar">${escapeHtml(specialistInitials(specialist.name))}</span>
-          <span class="specialist-meta">
-            <strong>${escapeHtml(specialist.name)}</strong>
-            <small>${escapeHtml(specialist.focus)}</small>
-          </span>
-        </article>
-      `
-    )
-    .join("");
-  const selectedList = selectedItems.length
-    ? selectedItems
-        .map(
-          (item) => `
-            <article class="agenda-mini-item">
-              <strong>${item.time ? `${escapeHtml(item.time)} | ` : ""}${escapeHtml(item.client)}</strong>
-              <span>${escapeHtml(item.type)} | ${escapeHtml(item.detail)}</span>
-              <small>${escapeHtml(item.meta)}</small>
-            </article>
-          `
-        )
-        .join("")
-    : `<div class="empty-state">No hay citas ni procedimientos programados para esta fecha.</div>`;
-
-  return `
-    <div class="agenda-board">
-      <section class="agenda-calendar" aria-label="Calendario de citas">
-        <div class="agenda-calendar-top">
-          <strong>${escapeHtml(selectedTitle)}</strong>
-          <span class="agenda-menu" aria-hidden="true">v</span>
-        </div>
-        <div class="agenda-month-row">
-          <h4>${escapeHtml(monthTitle)}</h4>
-          <div class="agenda-month-controls" aria-hidden="true">
-            <span class="agenda-arrow is-up"></span>
-            <span class="agenda-arrow is-down"></span>
-          </div>
-        </div>
-        <div class="agenda-weekdays">
-          ${weekdayShortNames.map((day) => `<span>${escapeHtml(day)}</span>`).join("")}
-        </div>
-        <div class="agenda-days">
-          ${days}
-        </div>
-      </section>
-      <section class="agenda-team" aria-label="Equipo de procedimientos">
-        <div class="agenda-team-head">
-          <span>Equipo</span>
-          <strong>20 especialistas</strong>
-        </div>
-        <div class="specialist-list">${team}</div>
-      </section>
-    </div>
-    <section class="agenda-today">
-      <div class="agenda-today-head">
-        <strong>Agenda del dia</strong>
-        <span>${escapeHtml(selectedItems.length)} registros | ${escapeHtml(selectedDay)}</span>
-      </div>
-      <div class="agenda-today-list">${selectedList}</div>
-    </section>
-  `;
-}
 
 const viewRenderers = {
   clientes(search) {
@@ -1385,13 +1200,17 @@ const viewRenderers = {
         `;
       });
 
+    // aria-pressed: sin el, un lector de pantalla lee ocho botones iguales y
+    // no dice cual esta aplicado. Los dias del calendario ya lo llevaban.
     const chip = (value, label, count, tone = "") =>
-      `<button class="filter-chip ${filter === value ? "is-active" : ""}" type="button" data-inventory-filter="${escapeHtml(value)}">${escapeHtml(label)}${
+      `<button class="filter-chip ${filter === value ? "is-active" : ""}" type="button" aria-pressed="${
+        filter === value
+      }" data-inventory-filter="${escapeHtml(value)}">${escapeHtml(label)}${
         count === null ? "" : ` <b class="${tone}">${escapeHtml(count)}</b>`
       }</button>`;
 
     const filters = `
-      <div class="filter-bar">
+      <div class="filter-bar" role="group" aria-label="Filtrar productos">
         ${chip("all", "Todos", all.length)}
         ${chip("low", "Bajo minimo", lowCount)}
         ${chip("unplaced", "Sin ubicacion", unplacedCount)}
@@ -1715,7 +1534,7 @@ const viewRenderers = {
       "Nueva cita",
       form,
       "Agenda",
-      `${renderAppointmentAgenda()}${renderTable(["Cliente", "Fecha", "Especialista", "Estado", "Acciones"], rows)}`
+      `${typeof renderAppointmentAgenda === "function" ? renderAppointmentAgenda() : ""}${renderTable(["Cliente", "Fecha", "Especialista", "Estado", "Acciones"], rows)}`
     );
   },
 
@@ -1893,12 +1712,39 @@ function moveFormToDrawer() {
   if (!drawerElements.body) return;
   const panel = elements.viewContent?.querySelector(".view-grid > .form-panel");
   if (!panel) return;
+
+  // Si el panel esta abierto, alguien lo esta llenando. Un render disparado
+  // por la sincronizacion -otra persona guardo algo- no debe borrarle lo
+  // escrito. Se descarta el formulario recien generado para no dejar dos
+  // copias en el documento: los modulos que buscan form[data-form="..."] con
+  // querySelector se quedarian con la copia oculta.
+  if (document.body.classList.contains("drawer-open")) {
+    panel.remove();
+    return;
+  }
+
   drawerElements.body.replaceChildren(panel);
   if (drawerElements.title) {
     drawerElements.title.textContent = panel.dataset.formTitle || "Nuevo registro";
   }
   const hasForm = Boolean(panel.querySelector(".data-form"));
   if (drawerElements.submit) drawerElements.submit.hidden = !hasForm;
+}
+
+// El panel cerrado sigue en el documento, solo desplazado fuera de la
+// pantalla. Sin `inert`, sus nueve controles seguian en el recorrido del
+// tabulador: el foco desaparecia de la vista y habia que tabular a ciegas
+// para salir. `inert` los saca del recorrido y del arbol de accesibilidad,
+// que es ademas lo que exige `aria-hidden`.
+function setDrawerInert(isOpen) {
+  if (!drawerElements.root) return;
+  drawerElements.root.inert = !isOpen;
+  drawerElements.root.setAttribute("aria-hidden", isOpen ? "false" : "true");
+  // Y al reves mientras esta abierto: el resto de la pagina queda inerte,
+  // asi el foco no se escapa por detras del velo, que solo frena al raton.
+  document.querySelectorAll(".topbar, .app-shell").forEach((region) => {
+    region.inert = isOpen;
+  });
 }
 
 function openDrawer() {
@@ -1909,16 +1755,20 @@ function openDrawer() {
   }
   drawerReturnFocus = document.activeElement;
   document.body.classList.add("drawer-open");
-  drawerElements.root.setAttribute("aria-hidden", "false");
+  setDrawerInert(true);
   window.setTimeout(() => {
-    drawerElements.body?.querySelector("input, select, textarea")?.focus();
+    // Solo controles realmente enfocables: el campo de foto trae un input de
+    // archivo oculto y otro de tipo hidden, y enfocarlos no hace nada.
+    drawerElements.body
+      ?.querySelector("input:not([type=hidden]):not([hidden]), select, textarea")
+      ?.focus();
   }, 220);
 }
 
 function closeDrawer() {
   if (!document.body.classList.contains("drawer-open")) return;
   document.body.classList.remove("drawer-open");
-  drawerElements.root?.setAttribute("aria-hidden", "true");
+  setDrawerInert(false);
   if (drawerReturnFocus instanceof HTMLElement) drawerReturnFocus.focus();
   drawerReturnFocus = null;
 }
@@ -2157,6 +2007,8 @@ const photoViewer = {
   close: document.querySelector("#photoViewerClose")
 };
 
+let photoViewerReturnFocus = null;
+
 function openPhotoViewer(imageId, name) {
   if (!photoViewer.root) return;
   photoViewer.caption.textContent = name || "Foto del producto";
@@ -2164,14 +2016,21 @@ function openPhotoViewer(imageId, name) {
   photoViewer.image.alt = name ? `Foto de ${name}` : "Foto del producto";
   photoViewer.root.classList.add("is-open");
   photoViewer.root.setAttribute("aria-hidden", "false");
+  // Sin esto el foco se queda en la miniatura que la foto acaba de tapar, y
+  // el tabulador recorre la pagina de detras.
+  photoViewerReturnFocus = document.activeElement;
+  photoViewer.close?.focus();
   loadProductImage(imageId).then((url) => {
     if (url) photoViewer.image.src = url;
   });
 }
 
 function closePhotoViewer() {
-  photoViewer.root?.classList.remove("is-open");
-  photoViewer.root?.setAttribute("aria-hidden", "true");
+  if (!photoViewer.root?.classList.contains("is-open")) return;
+  photoViewer.root.classList.remove("is-open");
+  photoViewer.root.setAttribute("aria-hidden", "true");
+  if (photoViewerReturnFocus instanceof HTMLElement) photoViewerReturnFocus.focus();
+  photoViewerReturnFocus = null;
 }
 
 function handleSubmit(event) {
@@ -2834,17 +2693,29 @@ function openDropdown(button) {
   const options = dropdownOptions(menuName);
   const rect = button.getBoundingClientRect();
 
+  elements.dropdownLayer.setAttribute("role", "menu");
   elements.dropdownLayer.innerHTML = options
     .map((item) => {
       const moduleAttr = item.module ? ` data-menu-module="${item.module}"` : "";
       const userAttr = item.switchUser ? ` data-menu-switch="${item.switchUser}"` : "";
       const branchAttr = item.branch ? ` data-menu-branch="${item.branch}"` : "";
       const logoutAttr = item.logout ? ` data-menu-logout="true"` : "";
-      return `<button type="button"${moduleAttr}${userAttr}${branchAttr}${logoutAttr} data-menu-label="${escapeHtml(item.label)}">${escapeHtml(item.label)}<span>&gt;</span></button>`;
+      return `<button type="button" role="menuitem"${moduleAttr}${userAttr}${branchAttr}${logoutAttr} data-menu-label="${escapeHtml(item.label)}">${escapeHtml(item.label)}<span>&gt;</span></button>`;
     })
     .join("");
   elements.dropdownLayer.style.left = `${Math.min(rect.left, window.innerWidth - 244)}px`;
   elements.dropdownLayer.classList.add("is-open");
+  markDropdownExpanded(button);
+  // El menu se dibuja fuera del boton, asi que el tabulador no llegaria solo.
+  elements.dropdownLayer.querySelector("button")?.focus();
+}
+
+// Sin `aria-expanded` el lector de pantalla nunca dice si el menu esta
+// abierto: las opciones simplemente aparecen.
+function markDropdownExpanded(openButton) {
+  document.querySelectorAll("[data-menu]").forEach((button) => {
+    button.setAttribute("aria-expanded", button === openButton ? "true" : "false");
+  });
 }
 
 function dropdownOptions(menuName) {
@@ -2870,6 +2741,7 @@ function dropdownOptions(menuName) {
 }
 
 function closeDropdown() {
+  markDropdownExpanded(null);
   elements.dropdownLayer.classList.remove("is-open");
 }
 
@@ -3007,6 +2879,50 @@ async function handlePhotoSelection(input) {
   const field = input.closest("[data-photo-field]");
   const file = input.files?.[0];
   input.value = "";
+  await uploadPhotoIntoField(field, file);
+}
+
+// El recuadro punteado invitaba a soltar una foto ahi, pero no habia ni un
+// manejador de arrastre: el navegador abria la imagen en la pestana y se
+// perdia el formulario a medio llenar.
+function bindPhotoDropZones() {
+  const stop = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  document.addEventListener("dragover", (event) => {
+    const zone = event.target.closest?.("[data-photo-drop]");
+    if (!zone) return;
+    stop(event);
+    event.dataTransfer.dropEffect = "copy";
+    zone.classList.add("is-over");
+  });
+
+  document.addEventListener("dragleave", (event) => {
+    const zone = event.target.closest?.("[data-photo-drop]");
+    if (zone && !zone.contains(event.relatedTarget)) zone.classList.remove("is-over");
+  });
+
+  // Fuera de la zona tambien hay que interceptarlo: si no, soltar la foto
+  // un centimetro al lado navega a la imagen y se pierde lo escrito.
+  document.addEventListener("dragover", (event) => {
+    if (!event.target.closest?.("[data-photo-drop]")) event.preventDefault();
+  });
+
+  document.addEventListener("drop", (event) => {
+    const zone = event.target.closest?.("[data-photo-drop]");
+    if (!zone) {
+      event.preventDefault();
+      return;
+    }
+    stop(event);
+    zone.classList.remove("is-over");
+    uploadPhotoIntoField(zone.closest("[data-photo-field]"), event.dataTransfer?.files?.[0]);
+  });
+}
+
+async function uploadPhotoIntoField(field, file) {
   if (!field || !file) return;
 
   const hint = field.querySelector("[data-photo-hint]");
@@ -3112,4 +3028,5 @@ document.addEventListener("keydown", (event) => {
   closeDrawer();
 });
 
+bindPhotoDropZones();
 restoreSession();

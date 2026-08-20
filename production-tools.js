@@ -171,7 +171,9 @@
         <input type="file" accept="application/json,.json" data-online-import-file hidden>
       </div>
     `;
-    panel.prepend(tools);
+    // Debajo de los datos, no encima: el resumen y el respaldo son tareas
+    // ocasionales y empujaban la tabla trescientos pixeles hacia abajo.
+    panel.append(tools);
   }
 
   function enhanceCurrentView() {
@@ -216,8 +218,8 @@
       display: grid;
       gap: 12px;
       padding: 12px;
-      border: 1px solid rgba(36, 49, 50, 0.08);
-      background: rgba(251, 251, 244, 0.94);
+      border: 1px solid var(--line);
+      background: var(--surface);
       border-radius: var(--radius);
     }
 
@@ -241,10 +243,11 @@
     .branch-report-head span,
     .branch-report-head small,
     .production-tools span {
-      color: var(--muted);
-      font-size: 11px;
-      font-weight: 800;
-      text-transform: uppercase;
+      color: var(--ink-3);
+      font-size: 11.5px;
+      font-weight: 600;
+      letter-spacing: 0;
+      text-transform: none;
     }
 
     .branch-report-grid {
@@ -258,15 +261,15 @@
       gap: 4px;
       min-width: 0;
       padding: 10px;
-      background: #fff;
-      border: 1px solid rgba(36, 49, 50, 0.06);
+      background: var(--surface);
+      border: 1px solid var(--line);
       border-radius: var(--radius);
     }
 
     .branch-report-grid span {
-      color: var(--muted);
-      font-size: 11px;
-      font-weight: 800;
+      color: var(--ink-3);
+      font-size: 11.5px;
+      font-weight: 500;
     }
 
     .branch-report-grid strong {

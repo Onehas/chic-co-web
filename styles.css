@@ -1,59 +1,79 @@
 /* =====================================================================
-   Chic & Co — sistema de interfaz "Atelier"
+   Chic & Co — sistema de interfaz
    ---------------------------------------------------------------------
-   Herramienta interna de operaciones: densidad de back-office con la
-   calidez de la marca. La identidad (menta, dorado, crema) se conserva
-   como color de superficie; para texto y acciones se usan versiones
-   profundas que sí cumplen contraste.
+   Paleta neutra: el gris hace el trabajo estructural y el color queda
+   reservado para lo que significa algo (estado de una cita, stock bajo,
+   la accion principal de la pantalla). Un back-office se mira ocho horas
+   seguidas; el color usado como decoracion cansa y, peor, deja de avisar
+   cuando de verdad hace falta.
+
+   Cada token se declara tres veces: en `:root` para el tema claro, bajo
+   `prefers-color-scheme: dark` para quien tiene el sistema en oscuro, y
+   bajo `[data-theme="dark"]` para el conmutador manual de la barra
+   superior. Ningun color se define solo dentro de un bloque.
    ===================================================================== */
 
 :root {
+  color-scheme: light;
+
   /* superficies */
-  --bg: #f4f7f5;
+  --bg: #f2f2f4;
   --surface: #ffffff;
-  --surface-2: #eef2f0;
-  --surface-3: #e4ebe8;
-  --line: #dbe4e0;
-  --line-strong: #c2d0cb;
+  --surface-2: #f6f6f8;
+  --surface-3: #ebebef;
+  --line: #e3e3e7;
+  --line-strong: #c9c9cf;
 
   /* texto */
-  --ink: #16211f;
-  --ink-2: #40514e;
-  --ink-3: #6b7c78;
+  --ink: #1d1d1f;
+  --ink-2: #45454b;
+  --ink-3: #5e5e66; /* 5,0:1 sobre surface-3, el fondo mas oscuro del tema claro */
 
-  /* marca */
-  --mint: #9bc9c3;
-  --mint-soft: #e4f1ee;
-  --brand: #1f544c;
-  --brand-hover: #17423c;
-  --brand-soft: #dceae6;
+  /* accion principal: grafito, no un color de marca. Destaca por
+     contraste, no por saturacion, y no compite con los estados. */
+  --brand: #1d1d1f;
+  --brand-hover: #000000;
+  --brand-soft: #e8e8ed;
   --on-brand: #ffffff;
-  --gold: #d4ad75;
-  --gold-deep: #7d5a1c;
-  --gold-soft: #f6edda;
 
-  /* semánticos: separados del acento de marca */
-  --ok: #2f7148;
-  --ok-soft: #e0efe5;
+  /* acento de seleccion y foco */
+  --accent: #0062c4;
+  --accent-soft: #e6f0fb;
+
+  /* la identidad queda en el dorado del logotipo y poco mas */
+  --gold: #b98d3f;
+  --gold-deep: #6f5316;
+  --gold-soft: #f7f1e3;
+  --mint: #d2d2d7;
+  --mint-soft: #f0f0f3;
+
+  /* semánticos */
+  --ok: #1c7a43;
+  --ok-soft: #e4f2e9;
   --warn: #8a5a10;
-  --warn-soft: #faeed6;
-  --crit: #a03528;
-  --crit-soft: #fae7e3;
-  --info: #2a5c86;
-  --info-soft: #e2edf5;
+  --warn-soft: #f8efdc;
+  --crit: #b3261e;
+  --crit-soft: #fbe9e7;
+  --info: #0062c4;
+  --info-soft: #e6f0fb;
 
   /* densidad y forma */
   --row-h: 44px;
   --cell-x: 14px;
-  --radius: 8px;
-  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-sm: 7px;
   --rail-w: 212px;
   --topbar-h: 54px;
   --gutter: 18px;
 
-  --shadow-1: 0 1px 2px rgba(22, 33, 31, 0.06);
-  --shadow-2: 0 4px 16px rgba(22, 33, 31, 0.08);
-  --shadow-3: 0 16px 48px rgba(22, 33, 31, 0.18);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.07);
+  --shadow-3: 0 18px 48px rgba(0, 0, 0, 0.16);
+
+  /* curvas: las de serie de CSS son demasiado suaves y hacen que todo
+     parezca lento. Estas arrancan rapido, que es lo que se mira. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
 
   /* compatibilidad con módulos que aún leen los tokens antiguos */
   --cream: var(--bg);
@@ -171,9 +191,11 @@ body.is-authenticated .login-screen {
   width: 92px;
   height: 92px;
   padding: 12px;
-  background: #0f100e;
-  border: 1px solid rgba(212, 173, 117, 0.3);
-  border-radius: 14px;
+  /* El logotipo es negro sobre transparente: necesita un marco oscuro
+     propio en los dos temas, no la superficie de la pantalla. */
+  background: #111113;
+  border: 1px solid rgba(185, 141, 63, 0.34);
+  border-radius: 16px;
 }
 
 .login-logo-frame img {
@@ -243,9 +265,9 @@ body.is-authenticated .login-screen {
   width: 28px;
   height: 28px;
   color: var(--gold);
-  background: #10100e;
-  border: 1px solid rgba(212, 173, 117, 0.32);
-  border-radius: 7px;
+  background: #111113;
+  border: 1px solid rgba(185, 141, 63, 0.34);
+  border-radius: 8px;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: -0.02em;
@@ -317,15 +339,24 @@ body.is-authenticated .login-screen {
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  transition: background 160ms, color 160ms;
+  transition: background 160ms ease, color 160ms ease, transform 140ms var(--ease-out);
 }
 
-.icon-button:hover {
-  color: var(--ink);
-  background: var(--surface-2);
+@media (hover: hover) and (pointer: fine) {
+  .icon-button:hover {
+    color: var(--ink);
+    background: var(--surface-2);
+  }
+}
+
+/* Un boton tiene que acusar recibo de la pulsacion. Sin esto la barra
+   superior parece que no escucha. */
+.icon-button:active {
+  transform: scale(0.94);
 }
 
 .icon-button svg {
+  grid-area: 1 / 1;
   width: 17px;
   height: 17px;
   fill: none;
@@ -333,6 +364,21 @@ body.is-authenticated .login-screen {
   stroke-width: 1.7;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+/* El conmutador de tema apila los tres iconos y solo muestra el del
+   estado vigente. */
+#themeToggle svg {
+  opacity: 0;
+  transform: scale(0.8) rotate(-25deg);
+  transition: opacity 180ms var(--ease-out), transform 180ms var(--ease-out);
+}
+
+#themeToggle[data-theme-state="auto"] .theme-icon-auto,
+#themeToggle[data-theme-state="light"] .theme-icon-light,
+#themeToggle[data-theme-state="dark"] .theme-icon-dark {
+  opacity: 1;
+  transform: none;
 }
 
 .user-menu {
@@ -637,10 +683,15 @@ body.is-authenticated .login-screen {
 }
 
 @media (max-width: 860px) {
+  /* El riel queda reducido a iconos: los rotulos de grupo no caben y se
+     salian del ancho. Se sustituyen por una linea separadora. */
   .rail-group {
+    height: 1px;
+    margin: 6px 8px;
     padding: 0;
-    font-size: 9px;
-    text-align: center;
+    overflow: hidden;
+    background: var(--line);
+    text-indent: -999px;
   }
 
   .module-headline .action-row {
@@ -664,7 +715,15 @@ body.is-authenticated .login-screen {
   border-radius: var(--radius-sm);
   font-size: 13.5px;
   font-weight: 500;
-  transition: background 160ms, border-color 160ms, color 160ms;
+  transition: background 160ms ease, border-color 160ms ease, color 160ms ease,
+    transform 140ms var(--ease-out);
+}
+
+.primary-action:active,
+.secondary-action:active,
+.row-action:active,
+.module-button:active {
+  transform: scale(0.975);
 }
 
 .primary-action {
@@ -973,7 +1032,8 @@ tbody tr:hover {
   font-size: 12.5px;
   font-weight: 500;
   white-space: nowrap;
-  transition: background 140ms, color 140ms, border-color 140ms;
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease,
+    transform 140ms var(--ease-out);
 }
 
 .row-action:hover {
@@ -1021,6 +1081,25 @@ tbody tr:hover {
   color: var(--ink-2);
   font-size: 12.5px;
   font-weight: 600;
+}
+
+/* Hasta ahora no habia forma de ver que campos son obligatorios: el
+   navegador solo lo decia al rechazar el envio. */
+.field.is-required > span::after {
+  content: "*";
+  margin-left: 3px;
+  color: var(--crit);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .field input,
@@ -1612,347 +1691,11 @@ th.num {
   gap: 10px;
 }
 
-.stat-strip {
-  display: none;
-}
-
-/* ---------------------------------------------------------------------
-   Agenda
-   ------------------------------------------------------------------ */
-
-.agenda-board {
-  display: grid;
-  grid-template-columns: minmax(240px, 268px) minmax(0, 1fr);
-  gap: 12px;
-  min-width: 0;
-}
-
-.agenda-calendar,
-.agenda-day-panel,
-.agenda-team,
-.agenda-today,
-.agenda-availability {
-  display: grid;
-  align-content: start;
-  gap: 11px;
-  padding: 14px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-1);
-}
-
-.agenda-calendar-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.agenda-calendar-top strong {
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.agenda-month-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.agenda-month-row h4 {
-  margin: 0;
-  color: var(--ink-2);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.agenda-month-controls {
-  display: inline-flex;
-  gap: 4px;
-}
-
-.agenda-month-controls button,
-.agenda-today-button {
-  display: grid;
-  place-items: center;
-  min-width: 26px;
-  min-height: 26px;
-  padding: 0 8px;
-  color: var(--ink-2);
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.agenda-month-controls button:hover,
-.agenda-today-button:hover {
-  background: var(--surface-2);
-}
-
-.agenda-weekdays,
-.agenda-days {
-  display: grid;
-  grid-template-columns: repeat(7, 1fr);
-  gap: 2px;
-}
-
-.agenda-weekdays span {
-  padding: 3px 0;
-  color: var(--ink-3);
-  font-size: 10.5px;
-  font-weight: 700;
-  text-align: center;
-}
-
-.agenda-day {
-  position: relative;
-  display: grid;
-  place-items: center;
-  aspect-ratio: 1;
-  color: var(--ink-2);
-  background: transparent;
-  border: 0;
-  border-radius: 5px;
-  font-size: 12.5px;
-  font-variant-numeric: tabular-nums;
-  transition: background 130ms;
-}
-
-.agenda-day:hover {
-  background: var(--surface-2);
-}
-
-.agenda-day.is-muted {
-  color: var(--ink-3);
-  opacity: 0.45;
-}
-
-.agenda-day.has-appointments::after {
-  content: "";
-  position: absolute;
-  bottom: 4px;
-  width: 3px;
-  height: 3px;
-  background: var(--gold-deep);
-  border-radius: 50%;
-}
-
-.agenda-day.is-selected {
-  color: var(--on-brand);
-  background: var(--brand);
-  font-weight: 700;
-}
-
-.agenda-day.is-selected::after {
-  background: currentColor;
-}
-
-.agenda-day small {
-  display: none;
-}
-
-.agenda-today-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.agenda-today-head strong {
-  font-size: 14.5px;
-  font-weight: 600;
-}
-
-.agenda-today-head span {
-  color: var(--ink-3);
-  font-size: 12.5px;
-}
-
-.agenda-timeline,
-.agenda-today-list {
-  display: grid;
-  gap: 6px;
-  max-height: 420px;
-  overflow-y: auto;
-}
-
-.agenda-event-card,
-.agenda-mini-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 11px;
-  min-width: 0;
-  padding: 9px 11px;
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-left: 3px solid var(--info);
-  border-radius: var(--radius-sm);
-  transition: border-color 140ms, box-shadow 140ms;
-}
-
-.agenda-event-card:hover {
-  box-shadow: var(--shadow-1);
-}
-
-.agenda-event-card > div,
-.agenda-mini-item {
-  display: grid;
-  gap: 1px;
-  min-width: 0;
-}
-
-.agenda-event-card strong,
-.agenda-mini-item strong {
-  font-size: 13.5px;
-  font-weight: 600;
-}
-
-.agenda-event-card span,
-.agenda-event-card small,
-.agenda-mini-item span,
-.agenda-mini-item small,
-.muted-cell {
-  color: var(--ink-3);
-  font-size: 12.5px;
-}
-
-.agenda-availability {
-  margin-top: 0;
-}
-
-.agenda-availability-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(232px, 1fr));
-  gap: 8px;
-  max-height: 460px;
-  overflow-y: auto;
-}
-
-.agenda-availability-card {
-  display: grid;
-  gap: 7px;
-  padding: 10px;
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-}
-
-.agenda-availability-card > div:first-child {
-  display: grid;
-  gap: 1px;
-  min-width: 0;
-}
-
-.agenda-availability-card strong {
-  font-size: 13.5px;
-  font-weight: 600;
-}
-
-.agenda-slot-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  max-height: 132px;
-  overflow-y: auto;
-}
-
-.agenda-slot-row button {
-  min-height: 26px;
-  min-width: 56px;
-  padding: 0 8px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  font-size: 12px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-.agenda-slot-row button.is-free {
-  color: var(--brand);
-  background: var(--brand-soft);
-  border-color: var(--brand-soft);
-}
-
-.agenda-slot-row button.is-free:hover {
-  border-color: var(--brand);
-}
-
-.agenda-slot-row button.is-busy {
-  color: var(--ink-3);
-  background: var(--surface-3);
-  cursor: not-allowed;
-}
-
-.agenda-full {
-  color: var(--crit);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.agenda-team-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  color: var(--ink-3);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.specialist-list {
-  display: grid;
-  gap: 5px;
-  max-height: 320px;
-  overflow-y: auto;
-}
-
-.specialist-card {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 7px 9px;
-  background: var(--surface-2);
-  border-radius: var(--radius-sm);
-}
-
-.specialist-avatar {
-  display: grid;
-  flex: none;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  color: var(--on-brand);
-  background: var(--brand);
-  border-radius: 50%;
-  font-size: 10.5px;
-  font-weight: 700;
-}
-
-.specialist-meta {
-  display: grid;
-  gap: 0;
-  min-width: 0;
-}
-
-.specialist-meta strong {
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.specialist-meta small {
-  color: var(--ink-3);
-  font-size: 12px;
-}
-
-.agenda-menu,
-.agenda-arrow {
-  display: none;
-}
+/* La agenda la dibuja y estiliza agenda-upgrade.js por completo. Lo que
+   habia aqui -calendario del mes, lista del dia, fichas de horario- ya no
+   coincide con ningun nodo desde que ese modulo reemplaza el renderizador.
+   Mantenerlo daba la falsa impresion de que styles.css controla la agenda,
+   cuando el desempate por orden lo gana siempre el bloque inyectado. */
 
 /* ---------------------------------------------------------------------
    Ventana modal (motivo de salida de inventario)
@@ -2296,62 +2039,88 @@ th.num {
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #0e1514;
-    --surface: #16201e;
-    --surface-2: #1d2927;
-    --surface-3: #253331;
-    --line: #2a3735;
-    --line-strong: #3a4b48;
-    --ink: #e6ede9;
-    --ink-2: #bcc9c5;
-    --ink-3: #8a9a96;
-    --mint-soft: #1a2e2b;
-    --brand: #7fc4b8;
-    --brand-hover: #97d2c7;
-    --brand-soft: #17302c;
-    --on-brand: #0e1514;
-    --gold-deep: #d9b57f;
-    --gold-soft: #2c2417;
-    --ok: #6fb98a;
-    --ok-soft: #16291d;
-    --warn: #d5a85e;
-    --warn-soft: #2c2416;
-    --crit: #e08e82;
-    --crit-soft: #301f1c;
-    --info: #86b4d8;
-    --info-soft: #1a2733;
-    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
-    --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.4);
-    --shadow-3: 0 16px 48px rgba(0, 0, 0, 0.5);
+    color-scheme: dark;
+
+    --bg: #000000;
+    --surface: #1c1c1e;
+    --surface-2: #2c2c2e;
+    --surface-3: #3a3a3c;
+    --line: #38383a;
+    --line-strong: #4d4d50;
+    --ink: #f5f5f7;
+    --ink-2: #c9c9ce;
+    --ink-3: #a8a8ad; /* 4,8:1 sobre surface-3, el fondo mas claro del tema oscuro */
+
+    /* En oscuro la accion principal se invierte: casi blanca sobre casi
+       negro. Es el mismo gesto -maximo contraste, cero saturacion-. */
+    --brand: #f5f5f7;
+    --brand-hover: #ffffff;
+    --brand-soft: #2c2c2e;
+    --on-brand: #1c1c1e;
+
+    --accent: #5fb0ff;
+    --accent-soft: #16283d;
+
+    --gold: #c9a45c;
+    --gold-deep: #d9bb84;
+    --gold-soft: #2b2418;
+    --mint: #48484a;
+    --mint-soft: #2c2c2e;
+
+    --ok: #4cc07a;
+    --ok-soft: #14271b;
+    --warn: #e0aa5c;
+    --warn-soft: #2b2416;
+    --crit: #f0837a;
+    --crit-soft: #331d1b;
+    --info: #5fb0ff;
+    --info-soft: #16283d;
+
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.6);
+    --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.55);
+    --shadow-3: 0 18px 48px rgba(0, 0, 0, 0.7);
   }
 }
 
 :root[data-theme="dark"] {
-  --bg: #0e1514;
-  --surface: #16201e;
-  --surface-2: #1d2927;
-  --surface-3: #253331;
-  --line: #2a3735;
-  --line-strong: #3a4b48;
-  --ink: #e6ede9;
-  --ink-2: #bcc9c5;
-  --ink-3: #8a9a96;
-  --mint-soft: #1a2e2b;
-  --brand: #7fc4b8;
-  --brand-hover: #97d2c7;
-  --brand-soft: #17302c;
-  --on-brand: #0e1514;
-  --gold-deep: #d9b57f;
-  --gold-soft: #2c2417;
-  --ok: #6fb98a;
-  --ok-soft: #16291d;
-  --warn: #d5a85e;
-  --warn-soft: #2c2416;
-  --crit: #e08e82;
-  --crit-soft: #301f1c;
-  --info: #86b4d8;
-  --info-soft: #1a2733;
-  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.4);
-  --shadow-3: 0 16px 48px rgba(0, 0, 0, 0.5);
+  color-scheme: dark;
+
+  --bg: #000000;
+  --surface: #1c1c1e;
+  --surface-2: #2c2c2e;
+  --surface-3: #3a3a3c;
+  --line: #38383a;
+  --line-strong: #4d4d50;
+  --ink: #f5f5f7;
+  --ink-2: #c9c9ce;
+  --ink-3: #a8a8ad; /* 4,8:1 sobre surface-3, el fondo mas claro del tema oscuro */
+
+  /* En oscuro la accion principal se invierte: casi blanca sobre casi
+     negro. Es el mismo gesto -maximo contraste, cero saturacion-. */
+  --brand: #f5f5f7;
+  --brand-hover: #ffffff;
+  --brand-soft: #2c2c2e;
+  --on-brand: #1c1c1e;
+
+  --accent: #5fb0ff;
+  --accent-soft: #16283d;
+
+  --gold: #c9a45c;
+  --gold-deep: #d9bb84;
+  --gold-soft: #2b2418;
+  --mint: #48484a;
+  --mint-soft: #2c2c2e;
+
+  --ok: #4cc07a;
+  --ok-soft: #14271b;
+  --warn: #e0aa5c;
+  --warn-soft: #2b2416;
+  --crit: #f0837a;
+  --crit-soft: #331d1b;
+  --info: #5fb0ff;
+  --info-soft: #16283d;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.6);
+  --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.55);
+  --shadow-3: 0 18px 48px rgba(0, 0, 0, 0.7);
 }

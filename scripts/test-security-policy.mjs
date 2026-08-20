@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import assert from "node:assert/strict";
 
 const require = createRequire(import.meta.url);
-const { applyWritePolicy, stripSensitiveState } = require("../backend/server.js");
+const { applyWritePolicy, stripSensitiveState, assertPersistableState, clientIp } = require("../backend/server.js");
 
 const permissions = {
   clientes: { read: true, write: true },
@@ -116,5 +116,92 @@ assert.equal(
   false,
   "ninguna imagen viaja embebida en el estado"
 );
+
+/* --- Escritura de productos sin permiso de inventario -------------------- */
+
+// Facturar descuenta stock, asi que recepcion necesita tocar `products`. Pero
+// solo eso: no puede crear productos, borrarlos ni cambiarles el precio.
+const stockCurrent = baseState();
+stockCurrent.products = [{ id: "PRD-1", name: "Peroxido", stock: 10, min: 2, price: 5000, cost: 3000 }];
+stockCurrent.branches.rohrmoser.products = stockCurrent.products;
+
+const stockNext = structuredClone(stockCurrent);
+stockNext.products = [
+  { id: "PRD-1", name: "Peroxido RENOMBRADO", stock: 9, min: 99, price: 1, cost: 1 },
+  { id: "PRD-999", name: "Producto inventado", stock: 500, min: 0, price: 0 }
+];
+stockNext.branches.rohrmoser.products = stockNext.products;
+
+const stockResult = applyWritePolicy(stockNext, stockCurrent, { userId: "USR-003" });
+assert.equal(stockResult.products.length, 1, "no puede agregar productos al catalogo");
+assert.equal(stockResult.products[0].stock, 9, "si puede descontar stock al facturar");
+assert.equal(stockResult.products[0].name, "Peroxido", "no puede renombrar el producto");
+assert.equal(stockResult.products[0].price, 5000, "no puede cambiar el precio");
+assert.equal(stockResult.products[0].min, 2, "no puede cambiar el minimo");
+assert.equal(
+  stockResult.branches.rohrmoser.products.length,
+  1,
+  "la restriccion tambien aplica dentro de la sucursal"
+);
+
+// Un stock negativo o no numerico se ignora en vez de corromper el inventario.
+const badStock = structuredClone(stockCurrent);
+badStock.products = [{ id: "PRD-1", name: "Peroxido", stock: -50, min: 2, price: 5000, cost: 3000 }];
+badStock.branches.rohrmoser.products = badStock.products;
+const badResult = applyWritePolicy(badStock, stockCurrent, { userId: "USR-003" });
+assert.equal(badResult.products[0].stock, 10, "ignora un stock negativo");
+
+// Quien si administra inventario conserva control total.
+const invUser = baseState();
+invUser.products = stockCurrent.products;
+invUser.branches.rohrmoser.products = stockCurrent.products;
+const invResult = applyWritePolicy(stockNext, invUser, { userId: "USR-000" });
+assert.equal(invResult.products.length, 2, "el super usuario si puede agregar productos");
+assert.equal(invResult.products[0].name, "Peroxido RENOMBRADO", "y renombrarlos");
+
+/* --- Un guardado parcial nunca puede destruir el estado ------------------ */
+
+// Antes, la rama de acceso total escribia el documento del cliente tal cual:
+// un PUT sin `users` ni `branches` persistia un estado sin cuentas y dejaba la
+// instancia inaccesible para siempre. Ahora toda escritura se fusiona.
+const partialCurrent = baseState();
+const partialResult = applyWritePolicy(
+  { clients: [{ id: "CL-9", name: "Unico" }] },
+  partialCurrent,
+  { userId: "USR-000" }
+);
+assert.equal(partialResult.users.length, 2, "un guardado parcial de super usuario conserva las cuentas");
+assert.ok(partialResult.branches?.rohrmoser, "y conserva las sucursales");
+assert.equal(partialResult.products.length, 1, "y las colecciones que el payload no traia");
+assert.equal(partialResult.clients[0].id, "CL-9", "aplicando lo que si venia");
+
+// El super usuario sigue pudiendo borrar de verdad cuando lo pide explicito.
+const deleteNext = structuredClone(partialCurrent);
+deleteNext.clients = [];
+const deleteResult = applyWritePolicy(deleteNext, partialCurrent, { userId: "USR-000" });
+assert.equal(deleteResult.clients.length, 0, "una coleccion vacia explicita si vacia");
+
+// El disco es la ultima barrera: un estado sin usuarios no se guarda nunca.
+assert.throws(
+  () => assertPersistableState({ clients: [], branches: {} }),
+  /sin usuarios/,
+  "rechaza persistir un estado sin usuarios"
+);
+assert.throws(
+  () => assertPersistableState({ users: [{ id: "USR-000" }] }),
+  /sucursales/,
+  "rechaza persistir un estado sin sucursales"
+);
+assert.ok(assertPersistableState(baseState()), "un estado completo si se puede guardar");
+
+/* --- La IP del limitador no se puede falsificar -------------------------- */
+
+// `X-Forwarded-For` lo escribe el cliente: tomar el primer elemento permitia
+// rotar la IP en cada intento y no acumular nunca el contador de fallos.
+const spoofed = {
+  headers: { "x-forwarded-for": "9.9.9.9, 10.0.0.1" },
+  socket: { remoteAddress: "127.0.0.1" }
+};
+assert.equal(clientIp(spoofed), "127.0.0.1", "ignora X-Forwarded-For sin proxys de confianza declarados");
 
 console.log("Security policy tests passed");
