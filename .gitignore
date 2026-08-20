@@ -3,6 +3,7 @@
 node_modules/
 cloudflared.exe
 backend/data/*.json
+backend/data/media/
 *.p12
 *.pfx
 *.pem

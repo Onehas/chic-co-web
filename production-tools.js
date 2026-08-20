@@ -115,6 +115,9 @@
   }
 
   function renderBranchReport() {
+    // El resumen mensual pertenece a Facturacion. Repetirlo en los ocho
+    // modulos empujaba el contenido real 300px hacia abajo.
+    if (typeof currentModule === "string" && currentModule !== "facturacion") return;
     if (!elements?.viewContent || elements.viewContent.querySelector(".branch-report")) return;
     const target = elements.viewContent.querySelector(".view-grid") || elements.viewContent.firstElementChild;
     if (!target) return;

@@ -4,6 +4,7 @@ const http = require("http");
 const path = require("path");
 const crypto = require("crypto");
 const { promises: fs } = require("fs");
+const mediaStore = require("./media-store");
 
 const rootDir = path.resolve(__dirname, "..");
 const dataDir = path.join(__dirname, "data");
@@ -88,7 +89,7 @@ const systemUserAuth = {
 
 const moduleWriteCollections = {
   clientes: ["clients"],
-  inventario: ["products", "stockMovements"],
+  inventario: ["products", "stockMovements", "locations"],
   procedimientos: ["procedures"],
   enCurso: ["activeProcedures", "products", "stockMovements"],
   planes: ["plans", "activeProcedures", "appointments"],
@@ -96,7 +97,7 @@ const moduleWriteCollections = {
   facturacion: ["invoices", "products", "stockMovements"],
   usuarios: ["users"]
 };
-const branchDataCollections = ["clients", "products", "procedures", "activeProcedures", "plans", "appointments", "invoices", "stockMovements"];
+const branchDataCollections = ["clients", "products", "procedures", "activeProcedures", "plans", "appointments", "invoices", "stockMovements", "locations"];
 const auditLogLimit = 300;
 
 const mimeTypes = {
@@ -855,6 +856,90 @@ async function handlePasswordChange(req, res, session) {
   sendJson(req, res, 200, { ok: true });
 }
 
+/* -------------------------------------------------------------------------
+ * Imágenes de producto
+ * ---------------------------------------------------------------------- */
+
+// Recorre el estado y devuelve todos los identificadores de imagen que siguen
+// referenciados, en las dos sucursales y en el nivel superior.
+function referencedImageIds(state) {
+  const ids = new Set();
+  const collect = (products) => {
+    if (!Array.isArray(products)) return;
+    products.forEach((product) => {
+      if (product?.imageId) ids.add(String(product.imageId));
+    });
+  };
+
+  collect(state?.products);
+  Object.values(state?.branches || {}).forEach((branch) => collect(branch?.products));
+  return ids;
+}
+
+async function handleMediaUpload(req, res, session) {
+  const state = await ensureState();
+  const user = sessionUserFromState(state, session);
+
+  // Subir una foto de producto es escribir en inventario.
+  if (!canWriteModule(user, "inventario") && !isFullAccessUser(user)) {
+    sendError(req, res, 403, "Este usuario no puede modificar el inventario.");
+    return;
+  }
+
+  const payload = await readJsonBody(req);
+  let saved;
+  try {
+    saved = await mediaStore.saveImage({
+      dataUrl: payload.dataUrl,
+      branchId: payload.branchId,
+      kind: "product",
+      ownerId: payload.ownerId,
+      userId: user.id
+    });
+  } catch (error) {
+    sendError(req, res, error.statusCode || 400, error.message || "No se pudo guardar la imagen.");
+    return;
+  }
+
+  sendJson(req, res, 201, {
+    ok: true,
+    image: { id: saved.id, contentType: saved.contentType, byteSize: saved.byteSize }
+  });
+}
+
+async function handleMediaItem(req, res, session, rawId) {
+  if (req.method === "DELETE") {
+    const state = await ensureState();
+    const user = sessionUserFromState(state, session);
+    if (!canWriteModule(user, "inventario") && !isFullAccessUser(user)) {
+      sendError(req, res, 403, "Este usuario no puede modificar el inventario.");
+      return;
+    }
+    const removed = await mediaStore.deleteImage(rawId);
+    sendJson(req, res, removed ? 200 : 404, { ok: removed });
+    return;
+  }
+
+  const image = await mediaStore.readImage(rawId);
+  if (!image) {
+    sendError(req, res, 404, "Imagen no encontrada.");
+    return;
+  }
+
+  setBaseHeaders(req, res);
+  res.writeHead(200, {
+    "Content-Type": image.contentType,
+    "Content-Length": image.buffer.length,
+    // El identificador es aleatorio y el contenido nunca cambia, así que se
+    // puede cachear de forma indefinida, pero solo en el navegador del usuario.
+    "Cache-Control": "private, max-age=31536000, immutable",
+    "Content-Disposition": "inline",
+    "X-Content-Type-Options": "nosniff"
+  });
+  if (req.method === "HEAD") res.end();
+  else res.end(image.buffer);
+}
+
 async function handleApi(req, res, url) {
   const pathname = url.pathname;
   if (!isAllowedOrigin(req)) {
@@ -898,6 +983,16 @@ async function handleApi(req, res, url) {
 
   if (pathname === "/api/password" && req.method === "POST") {
     await handlePasswordChange(req, res, session);
+    return;
+  }
+
+  if (pathname === "/api/media" && req.method === "POST") {
+    await handleMediaUpload(req, res, session);
+    return;
+  }
+
+  if (pathname.startsWith("/api/media/") && (req.method === "GET" || req.method === "DELETE")) {
+    await handleMediaItem(req, res, session, pathname.slice("/api/media/".length));
     return;
   }
 
@@ -988,6 +1083,15 @@ async function handleApi(req, res, url) {
     const collections = changedCollections(writableState, currentState);
     const savedState = stampRevision(writableState, currentState);
     await writeState(savedState);
+
+    // Si un producto con foto se elimina o se le cambia la imagen, el archivo
+    // anterior deja de estar referenciado y no debe quedarse ocupando espacio.
+    if (collections.some((name) => name.endsWith("products"))) {
+      mediaStore
+        .collectOrphans(referencedImageIds(savedState))
+        .catch((error) => console.error("No se pudieron limpiar imágenes huérfanas:", error.message));
+    }
+
     broadcastStateUpdated(session, collections);
     sendJson(req, res, 200, { ok: true, stateRevision: stateRevision(savedState) });
     return;
@@ -1127,5 +1231,6 @@ module.exports = {
   verifyPassword,
   stateRevision,
   stampRevision,
-  bootstrapState
+  bootstrapState,
+  referencedImageIds
 };
