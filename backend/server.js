@@ -5,6 +5,10 @@ const path = require("path");
 const crypto = require("crypto");
 const { promises: fs } = require("fs");
 const mediaStore = require("./media-store");
+const bookingStore = require("./booking-store");
+const publicBooking = require("./public-booking");
+const mailer = require("./mailer");
+const dailyReport = require("./daily-report");
 
 const rootDir = path.resolve(__dirname, "..");
 const dataDir = path.join(__dirname, "data");
@@ -1161,6 +1165,361 @@ async function handleMediaItem(req, res, session, rawId) {
   else res.end(image.buffer);
 }
 
+/* -------------------------------------------------------------------------
+ * Agenda publica
+ * ---------------------------------------------------------------------- */
+
+const branchLabels = {
+  rohrmoser: "Chic & Co Rohrmoser",
+  alajuela: "Chic & Co Alajuela"
+};
+
+// Limite por IP. Reservar una cita es un acto poco frecuente: quien pide seis
+// en una hora no es una clienta.
+const publicRequests = new Map();
+const publicWindowMs = 60 * 60 * 1000;
+const maxPublicRequestsPerIp = 6;
+const maxPublicRequestsPerEmail = 4;
+
+function publicRateLimited(req) {
+  const key = clientIp(req);
+  const now = Date.now();
+  const entry = publicRequests.get(key);
+
+  if (!entry || now > entry.resetAt) {
+    publicRequests.set(key, { count: 1, resetAt: now + publicWindowMs });
+    // La tabla se limpia sola aprovechando la escritura, para que no crezca
+    // sin limite en un proceso que vive semanas.
+    if (publicRequests.size > 5000) {
+      publicRequests.forEach((value, mapKey) => {
+        if (now > value.resetAt) publicRequests.delete(mapKey);
+      });
+    }
+    return false;
+  }
+
+  entry.count += 1;
+  return entry.count > maxPublicRequestsPerIp;
+}
+
+function publicBranchLabel(branchId) {
+  return branchLabels[branchId] || branchId;
+}
+
+async function handlePublicBooking(req, res, url) {
+  const pathname = url.pathname;
+
+  if (pathname === "/api/public/config" && req.method === "GET") {
+    const state = await ensureState();
+    sendJson(req, res, 200, { ok: true, config: publicBooking.bookingConfig(state, branchLabels) });
+    return;
+  }
+
+  if (pathname === "/api/public/availability" && req.method === "GET") {
+    const branchId = String(url.searchParams.get("branchId") || "");
+    const date = String(url.searchParams.get("date") || "");
+    const duration = Number(url.searchParams.get("duration") || 60);
+
+    if (!branchLabels[branchId] || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      sendError(req, res, 400, "Sucursal o fecha invalida.");
+      return;
+    }
+
+    const state = await ensureState();
+    const pending = await bookingStore.pendingForDay(branchId, date);
+    const { slots, reason } = publicBooking.availableSlots(state, branchId, date, duration, pending);
+    sendJson(req, res, 200, { ok: true, slots, reason });
+    return;
+  }
+
+  if (pathname === "/api/public/booking" && req.method === "POST") {
+    if (publicRateLimited(req)) {
+      sendError(req, res, 429, "Demasiadas solicitudes. Intente de nuevo mas tarde.");
+      return;
+    }
+
+    const payload = await readJsonBody(req);
+
+    // Campo trampa: es invisible en el formulario, asi que solo lo rellena un
+    // robot. Se responde 200 a proposito para no ensenarle que fue detectado.
+    if (String(payload.website || "").trim()) {
+      sendJson(req, res, 200, { ok: true, request: { id: "", status: "pending" } });
+      return;
+    }
+
+    const branchId = String(payload.branchId || "");
+    if (!branchLabels[branchId]) {
+      sendError(req, res, 400, "Sucursal invalida.");
+      return;
+    }
+
+    const state = await ensureState();
+    const procedure = publicBooking
+      .bookableProcedures(state, branchId)
+      .find((item) => item.id === String(payload.procedureId || ""));
+    if (!procedure) {
+      sendError(req, res, 400, "Ese servicio no esta disponible para reservar en linea.");
+      return;
+    }
+
+    let email;
+    let phone;
+    let name;
+    try {
+      email = bookingStore.normalizeEmail(payload.clientEmail);
+      phone = bookingStore.normalizePhone(payload.clientPhone);
+      name = bookingStore.normalizeName(payload.clientName);
+    } catch (error) {
+      sendError(req, res, error.statusCode || 400, error.message);
+      return;
+    }
+
+    if ((await bookingStore.countRecentByEmail(email, publicWindowMs)) >= maxPublicRequestsPerEmail) {
+      sendError(req, res, 429, "Ya tiene varias solicitudes en curso. Le escribiremos pronto.");
+      return;
+    }
+
+    const date = String(payload.date || "");
+    const time = String(payload.time || "");
+    const pending = await bookingStore.pendingForDay(branchId, date);
+    const problem = publicBooking.validateSlot(state, branchId, date, time, procedure.duration, pending);
+    if (problem) {
+      sendError(req, res, 409, problem);
+      return;
+    }
+
+    let request;
+    try {
+      request = await bookingStore.createRequest({
+        branchId,
+        procedureId: procedure.id,
+        procedureName: procedure.name,
+        date,
+        time,
+        duration: procedure.duration,
+        clientName: name,
+        clientEmail: email,
+        clientPhone: phone,
+        notes: payload.notes,
+        sourceIp: clientIp(req)
+      });
+    } catch (error) {
+      sendError(req, res, error.statusCode || 400, error.message || "No se pudo registrar la solicitud.");
+      return;
+    }
+
+    // Los correos no bloquean la respuesta: la clienta ya reservo y no tiene
+    // por que esperar a que Resend conteste. Si fallan, queda en la bitacora.
+    const label = publicBranchLabel(branchId);
+    mailer.sendRequestReceived(request, label).catch(() => {});
+    mailer
+      .sendStaffNewRequest(
+        request,
+        label,
+        publicBooking.whatsappUrl(
+          request.clientPhone,
+          `Hola ${request.clientName.split(" ")[0]}, le escribimos de Chic & Co por su solicitud de ${request.procedureName}.`
+        )
+      )
+      .catch(() => {});
+
+    broadcastStateUpdated(null, ["bookingRequests"]);
+    sendJson(req, res, 201, {
+      ok: true,
+      request: { id: request.id, date: request.date, time: request.time, status: request.status }
+    });
+    return;
+  }
+
+  sendError(req, res, 404, "Ruta publica no encontrada.");
+}
+
+/* -------------------------------------------------------------------------
+ * Bandeja de solicitudes (lado del personal)
+ * ---------------------------------------------------------------------- */
+
+function nextAppointmentId(appointments) {
+  const highest = (appointments || []).reduce((top, appointment) => {
+    const match = String(appointment?.id || "").match(/^CIT-(\d+)$/);
+    return match ? Math.max(top, Number(match[1])) : top;
+  }, 0);
+  return `CIT-${String(highest + 1).padStart(3, "0")}`;
+}
+
+// Inserta la cita en la sucursal que corresponde. El estado guarda cada
+// coleccion dos veces -dentro de `branches` y en el nivel superior, que es el
+// espejo de la sucursal abierta-, asi que hay que tocar las dos o la cita no
+// aparece hasta el siguiente cambio de sucursal.
+function appendAppointment(state, branchId, appointment) {
+  const branch = (state.branches[branchId] = state.branches[branchId] || {});
+  branch.appointments = [appointment, ...(branch.appointments || [])];
+  if (state.currentBranchId === branchId) {
+    state.appointments = [appointment, ...(state.appointments || [])];
+  }
+}
+
+// Busca una clienta ya registrada por correo o telefono, para no duplicar la
+// ficha cada vez que la misma persona reserva por la web.
+function findClientByContact(state, branchId, email, phone) {
+  const clients = state.branches?.[branchId]?.clients || [];
+  const digits = String(phone || "").replace(/\D+/g, "").slice(-8);
+  return (
+    clients.find((client) => String(client.email || "").trim().toLowerCase() === email) ||
+    clients.find((client) => String(client.phone || "").replace(/\D+/g, "").endsWith(digits)) ||
+    null
+  );
+}
+
+async function handleBookingInbox(req, res, url, session, pathname) {
+  const state = await ensureState();
+  const user = sessionUserFromState(state, session);
+
+  if (!canWriteModule(user, "citas") && !isFullAccessUser(user)) {
+    sendError(req, res, 403, "Este usuario no puede gestionar la agenda.");
+    return;
+  }
+
+  if (pathname === "/api/bookings" && req.method === "GET") {
+    const requests = await bookingStore.listRequests({
+      branchId: String(url.searchParams.get("branchId") || ""),
+      status: String(url.searchParams.get("status") || ""),
+      limit: Number(url.searchParams.get("limit") || 100)
+    });
+    sendJson(req, res, 200, {
+      ok: true,
+      requests: requests.map((request) => ({
+        ...request,
+        whatsappUrl: publicBooking.whatsappUrl(
+          request.clientPhone,
+          `Hola ${request.clientName.split(" ")[0]}, le escribimos de Chic & Co por su solicitud de ${request.procedureName}.`
+        )
+      }))
+    });
+    return;
+  }
+
+  const actionMatch = pathname.match(/^\/api\/bookings\/([\w-]{1,64})\/(confirm|reject)$/);
+  if (!actionMatch || req.method !== "POST") {
+    sendError(req, res, 404, "Ruta de solicitudes no encontrada.");
+    return;
+  }
+
+  const [, requestId, action] = actionMatch;
+  const payload = await readJsonBody(req);
+  const existing = await bookingStore.getRequest(requestId);
+
+  if (!existing) {
+    sendError(req, res, 404, "Solicitud no encontrada.");
+    return;
+  }
+  if (existing.status !== "pending") {
+    sendError(req, res, 409, "Esa solicitud ya fue resuelta por alguien mas.");
+    return;
+  }
+
+  if (action === "reject") {
+    const resolved = await bookingStore.resolveRequest(requestId, {
+      status: "rejected",
+      handledBy: user.id
+    });
+    if (!resolved) {
+      sendError(req, res, 409, "Esa solicitud ya fue resuelta por alguien mas.");
+      return;
+    }
+    mailer
+      .sendRequestRejected(resolved, publicBranchLabel(resolved.branchId), String(payload.reason || ""))
+      .catch(() => {});
+    broadcastStateUpdated(session, ["bookingRequests"]);
+    sendJson(req, res, 200, { ok: true, request: resolved });
+    return;
+  }
+
+  const specialist = String(payload.specialist || "").trim();
+  if (!specialist) {
+    sendError(req, res, 400, "Indique que especialista atendera la cita.");
+    return;
+  }
+
+  // Se cierra la solicitud ANTES de escribir la cita. Si dos personas de
+  // recepcion confirman a la vez, la segunda recibe null aqui y se va sin
+  // crear una cita duplicada; el coste de fallar en este orden es una
+  // solicitud cerrada sin cita, que se ve y se arregla. Al reves seria una
+  // cita fantasma que nadie sabe de donde salio.
+  const resolved = await bookingStore.resolveRequest(requestId, {
+    status: "confirmed",
+    handledBy: user.id
+  });
+  if (!resolved) {
+    sendError(req, res, 409, "Esa solicitud ya fue resuelta por alguien mas.");
+    return;
+  }
+
+  let created;
+  try {
+    created = await withStateLock(async () => {
+      const currentState = await ensureState();
+      const branchId = resolved.branchId;
+      const branchAppointments = currentState.branches?.[branchId]?.appointments || [];
+      const existingClient = findClientByContact(currentState, branchId, resolved.clientEmail, resolved.clientPhone);
+
+      const nextState = cloneValue(currentState);
+      let clientId = existingClient?.id || "";
+
+      if (!clientId) {
+        const branchClients = nextState.branches?.[branchId]?.clients || [];
+        const highest = branchClients.reduce((top, client) => {
+          const match = String(client?.id || "").match(/^CL-(\d+)$/);
+          return match ? Math.max(top, Number(match[1])) : top;
+        }, 0);
+        clientId = `CL-${String(highest + 1).padStart(3, "0")}`;
+        const newClient = {
+          id: clientId,
+          name: resolved.clientName,
+          phone: `+${resolved.clientPhone}`,
+          email: resolved.clientEmail,
+          lastVisit: "",
+          notes: "Registrada desde la agenda en linea."
+        };
+        nextState.branches[branchId] = nextState.branches[branchId] || {};
+        nextState.branches[branchId].clients = [newClient, ...branchClients];
+        if (nextState.currentBranchId === branchId) {
+          nextState.clients = [newClient, ...(nextState.clients || [])];
+        }
+      }
+
+      const appointment = {
+        id: nextAppointmentId(branchAppointments),
+        clientId,
+        procedureId: resolved.procedureId,
+        date: resolved.date,
+        time: resolved.time,
+        specialist,
+        status: "Confirmada",
+        duration: resolved.duration,
+        notes: resolved.notes ? `Reserva en linea: ${resolved.notes}` : "Reserva en linea",
+        bookingRequestId: resolved.id
+      };
+
+      appendAppointment(nextState, branchId, appointment);
+      addAuditEntry(nextState, user, "booking.confirm", [`appointments:${appointment.id}`]);
+      await writeState(stampRevision(nextState, currentState));
+      return appointment;
+    });
+  } catch (error) {
+    // La solicitud ya quedo confirmada pero la cita no entro. Se avisa con el
+    // identificador para poder crearla a mano en vez de dejarlo en silencio.
+    console.error(`No se pudo crear la cita de la solicitud ${resolved.id}:`, error.message);
+    sendError(req, res, 500, "La solicitud se marco confirmada pero la cita no se pudo crear. Creela manualmente.");
+    return;
+  }
+
+  mailer
+    .sendRequestConfirmed(resolved, publicBranchLabel(resolved.branchId), specialist)
+    .catch(() => {});
+  broadcastStateUpdated(session, ["appointments", "clients", "bookingRequests"]);
+  sendJson(req, res, 200, { ok: true, request: { ...resolved, appointmentId: created.id }, appointment: created });
+}
+
 async function handleApi(req, res, url) {
   const pathname = url.pathname;
   if (!isAllowedOrigin(req)) {
@@ -1185,6 +1544,37 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  // Agenda publica. Es la unica parte del sistema sin sesion, asi que es
+  // tambien la unica superficie que un desconocido puede tocar: todo lo que
+  // hay debajo esta limitado por peticion, validado y escrito en una tabla
+  // aparte, nunca en el documento de estado.
+  if (pathname.startsWith("/api/public/")) {
+    await handlePublicBooking(req, res, url);
+    return;
+  }
+
+  // Reporte de fin de dia. No lleva sesion porque quien la invoca es un Cron
+  // Job, no una persona: se autentica con un secreto compartido comparado en
+  // tiempo constante. Sin CHIC_REPORT_SECRET definido, la ruta no existe.
+  if (pathname === "/api/reports/daily" && req.method === "POST") {
+    const secret = String(process.env.CHIC_REPORT_SECRET || "");
+    if (!secret) {
+      sendError(req, res, 404, "Ruta de API no encontrada.");
+      return;
+    }
+    if (!timingSafeEqualText(String(req.headers["x-report-secret"] || ""), secret)) {
+      sendError(req, res, 401, "Secreto invalido.");
+      return;
+    }
+
+    const state = await ensureState();
+    const result = await dailyReport.sendReportFor(state, dailyReport.localParts().date, branchLabels, {
+      force: true
+    });
+    sendJson(req, res, result.ok ? 200 : 202, { ok: result.ok, detail: result.reason || "" });
+    return;
+  }
+
   // El token por query solo se acepta donde el navegador no puede poner
   // cabeceras: el `src` de una imagen y el EventSource del tiempo real. En el
   // resto de rutas se exige Authorization, porque los query strings quedan
@@ -1199,6 +1589,30 @@ async function handleApi(req, res, url) {
 
   if (pathname === "/api/events" && req.method === "GET") {
     handleRealtimeEvents(req, res, session);
+    return;
+  }
+
+  if (pathname === "/api/bookings" || pathname.startsWith("/api/bookings/")) {
+    await handleBookingInbox(req, res, url, session, pathname);
+    return;
+  }
+
+  if (pathname === "/api/reports/daily/preview" && req.method === "POST") {
+    const state = await ensureState();
+    const user = sessionUserFromState(state, session);
+    if (!isFullAccessUser(user)) {
+      sendError(req, res, 403, "Solo un administrador puede enviar el reporte.");
+      return;
+    }
+    const result = await dailyReport.sendReportFor(state, dailyReport.localParts().date, branchLabels, {
+      force: true
+    });
+    sendJson(req, res, 200, {
+      ok: result.ok,
+      detail: result.reason || "",
+      mailer: { configured: mailer.isConfigured(), recipients: mailer.staffRecipients.length },
+      deliveries: mailer.recentDeliveries().slice(0, 10)
+    });
     return;
   }
 
@@ -1461,6 +1875,13 @@ if (require.main === module) {
     console.log(`Chic & Co backend listo en http://${host}:${port}`);
   });
 }
+
+// Las capas fiscales vuelven a registrar el manejador de peticiones sobre este
+// mismo servidor, asi que el arranque real puede venir de cualquiera de ellas.
+// El temporizador se enciende una sola vez, cuando el servidor empieza a oir.
+server.on("listening", () => {
+  dailyReport.startScheduler(ensureState, branchLabels);
+});
 
 module.exports = {
   server,
