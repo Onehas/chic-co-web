@@ -36,7 +36,7 @@ function baseState() {
 }
 const uid = (s, id) => s.users.find((u) => u.id === id);
 
-assert.deepEqual(payrollCollections, ["commissions", "benefits", "vacations"]);
+assert.deepEqual(payrollCollections, ["staff", "commissions", "benefits", "vacations"]);
 
 /* --- hasPayrollAccess ---------------------------------------------------- */
 const st = baseState();

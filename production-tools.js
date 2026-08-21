@@ -168,6 +168,7 @@
         <button class="secondary-action" type="button" data-online-backup>Respaldo online</button>
         <button class="secondary-action" type="button" data-online-import>Importar online</button>
         <button class="secondary-action" type="button" data-online-audit>Bitacora</button>
+        <button class="secondary-action is-danger" type="button" data-online-reset>Empezar de cero</button>
         <input type="file" accept="application/json,.json" data-online-import-file hidden>
       </div>
     `;
@@ -201,8 +202,44 @@
     if (event.target.closest("[data-online-audit]")) {
       event.preventDefault();
       exportAuditLog();
+      return;
+    }
+    if (event.target.closest("[data-online-reset]")) {
+      event.preventDefault();
+      resetAllData();
     }
   });
+
+  // Empezar de cero: borra todos los datos operativos del servidor y deja las
+  // sucursales vacias, conservando las cuentas. Pide una confirmacion escrita
+  // para que sea imposible por accidente, y recomienda respaldar antes.
+  async function resetAllData() {
+    if (!canUseSuperTools()) return;
+    if (!confirm("Esto BORRA todos los clientes, inventario, procedimientos, citas, facturas, planes y planilla de las dos sucursales. Las cuentas de usuario se conservan. Esta accion no se puede deshacer.\n\nRecomendacion: exporta antes un Respaldo online.\n\n¿Continuar?")) {
+      return;
+    }
+    const typed = window.prompt('Para confirmar, escribe BORRAR en mayusculas:', "");
+    if (typed !== "BORRAR") {
+      showToast("Cancelado: no se borro nada.");
+      return;
+    }
+    try {
+      await backendRequest("/reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: "BORRAR" })
+      });
+      showToast("Datos borrados. Recargando...");
+      try {
+        localStorage.removeItem(storageKey);
+      } catch (error) {
+        /* el servidor ya es la fuente de verdad */
+      }
+      setTimeout(() => window.location.reload(), 700);
+    } catch (error) {
+      showToast(error.message || "No se pudo borrar los datos.");
+    }
+  }
 
   document.addEventListener("change", (event) => {
     const input = event.target.closest("[data-online-import-file]");

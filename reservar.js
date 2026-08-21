@@ -16,6 +16,8 @@
     branchStep: document.querySelector('[data-step="branch"]'),
     branchGroup: document.getElementById("branchGroup"),
     serviceGroup: document.getElementById("serviceGroup"),
+    serviceSearch: document.getElementById("serviceSearch"),
+    categoryNav: document.getElementById("categoryNav"),
     servicePicked: document.getElementById("servicePicked"),
     specialistStep: document.getElementById("specialistStep"),
     specialistGroup: document.getElementById("specialistGroup"),
@@ -42,13 +44,54 @@
     done: document.getElementById("done"),
     doneDetail: document.getElementById("doneDetail"),
     again: document.getElementById("againButton"),
-    steps: document.querySelectorAll(".card[data-step]")
+    railService: document.getElementById("railService"),
+    railSpecialist: document.getElementById("railSpecialist"),
+    railDate: document.getElementById("railDate"),
+    railTime: document.getElementById("railTime"),
+    railPrice: document.getElementById("railPrice"),
+    steps: document.querySelectorAll(".step[data-step]")
   };
 
   let config = null;
   // `specialist` vacio = sin preferencia (el salon asigna a quien este libre).
   const sel = { branchId: "", procedureId: "", specialist: "", date: "", time: "" };
+  // Filtros del catalogo de servicios (son muchos): categoria activa y texto de
+  // busqueda. "all" = todas las categorias.
+  let activeCategory = "all";
+  let serviceSearchText = "";
   let sending = false;
+
+  // Etiquetas amables para el cliente. En los datos el servicio trae la
+  // categoria de especialista que lo atiende (estilista/esteticista/manicurista);
+  // aqui se traduce a como lo piensa quien reserva. "" = sin categoria.
+  const CATEGORY_LABELS = {
+    estilista: "Cabello",
+    esteticista: "Facial & corporal",
+    manicurista: "Uñas",
+    "": "Otros"
+  };
+  // Orden en que se muestran los grupos.
+  const CATEGORY_ORDER = ["estilista", "esteticista", "manicurista", ""];
+
+  function categoryLabel(cat) {
+    return CATEGORY_LABELS[cat] ?? "Otros";
+  }
+
+  // Normaliza para buscar sin tildes ni mayusculas: "Depilacion" encuentra
+  // "depilación".
+  function fold(value) {
+    return String(value || "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+  }
+
+  // Una categoria activa "otros" agrupa los servicios sin categoria ("").
+  function matchesCategory(procedure) {
+    if (activeCategory === "all") return true;
+    if (activeCategory === "otros") return !(procedure.category || "");
+    return (procedure.category || "") === activeCategory;
+  }
   // Cada peticion de disponibilidad lleva numero: si cambian de dia mientras la
   // anterior sigue en vuelo, la respuesta vieja no debe pintar el dia equivocado.
   let availabilityToken = 0;
@@ -144,16 +187,43 @@
     el.datePicked.textContent = done.date ? shortDateLabel(sel.date) : "";
     el.timePicked.textContent = done.time ? sel.time : "";
 
+    updateRail();
     updateActionbar(done);
+  }
+
+  // El "ticket" de la rail (escritorio) se llena conforme la clienta elige. Un
+  // valor sin elegir queda tenue (data-empty) en vez de vacio.
+  function setRail(node, value) {
+    if (!node) return;
+    const has = Boolean(value);
+    node.textContent = has ? value : "—";
+    node.setAttribute("data-empty", String(!has));
+  }
+
+  function updateRail() {
+    const p = procedure();
+    setRail(el.railService, p ? p.name : "");
+    setRail(el.railSpecialist, sel.procedureId ? sel.specialist || "Sin preferencia" : "");
+    setRail(el.railDate, sel.date ? longDate(sel.date) : "");
+    setRail(el.railTime, sel.time || "");
+    setRail(el.railPrice, p && p.price > 0 ? money(p.price) : "");
   }
 
   /* --- Especialistas --------------------------------------------------- */
 
   function fillSpecialists() {
     if (!el.specialistGroup) return;
-    const specialists = branch()?.specialists || [];
-    // Si la especialista elegida ya no atiende en esta sucursal, se limpia.
-    if (sel.specialist && !specialists.includes(sel.specialist)) {
+    const all = branch()?.specialists || [];
+    // Cada servicio lo atiende un tipo de especialista (estilista/esteticista/
+    // manicurista). Si el servicio elegido tiene tipo, solo se ofrecen las
+    // especialistas de ese tipo; si no, se ofrecen todas.
+    const wantCategory = procedure()?.category || "";
+    const specialists = wantCategory ? all.filter((item) => item.category === wantCategory) : all;
+    const names = specialists.map((item) => item.name);
+
+    // Si la especialista elegida ya no puede hacer el servicio (o no atiende en
+    // esta sucursal), se limpia y se recalculan los horarios.
+    if (sel.specialist && !names.includes(sel.specialist)) {
       sel.specialist = "";
       sel.time = "";
     }
@@ -168,7 +238,7 @@
     };
     el.specialistGroup.innerHTML = [
       option("", "Sin preferencia"),
-      ...specialists.map((name) => option(name, name))
+      ...names.map((name) => option(name, name))
     ].join("");
   }
 
@@ -232,29 +302,92 @@
     fillSpecialists();
 
     if (!procedures.length) {
-      el.serviceGroup.innerHTML = `<p class="slots-empty">Esta sucursal aun no tiene servicios en linea.</p>`;
+      if (el.categoryNav) el.categoryNav.innerHTML = "";
+      el.serviceGroup.innerHTML = `<p class="services-empty">Esta sucursal aun no tiene servicios en linea.</p>`;
       refresh();
       return;
     }
 
-    el.serviceGroup.innerHTML = procedures
-      .map((p) => {
-        const selected = p.id === sel.procedureId;
-        const meta = `${p.duration} min`;
-        return `
-          <button type="button" role="radio" aria-checked="${selected}" class="service${
-          selected ? " is-selected" : ""
-        }" data-service="${escapeHtml(p.id)}">
-            <span class="service-radio" aria-hidden="true"></span>
-            <span class="service-body">
-              <span class="service-name">${escapeHtml(p.name)}</span>
-              <span class="service-meta">${escapeHtml(meta)}</span>
-            </span>
-            ${p.price > 0 ? `<span class="service-price">${escapeHtml(money(p.price))}</span>` : ""}
-          </button>`;
-      })
-      .join("");
+    renderCategoryNav(procedures);
+    renderServiceList(procedures);
     refresh();
+  }
+
+  // Pestañas de categoria con su conteo. Solo aparecen las categorias que
+  // realmente tienen servicios; con una sola categoria la barra no se muestra.
+  function renderCategoryNav(procedures) {
+    if (!el.categoryNav) return;
+    const counts = new Map();
+    procedures.forEach((p) => {
+      const key = p.category || "";
+      counts.set(key, (counts.get(key) || 0) + 1);
+    });
+    const present = CATEGORY_ORDER.filter((k) => counts.has(k));
+    if (present.length <= 1) {
+      el.categoryNav.innerHTML = "";
+      activeCategory = "all";
+      return;
+    }
+
+    // Si la categoria activa ya no existe (cambio de sucursal), volver a "Todo".
+    if (activeCategory !== "all") {
+      const activeKey = activeCategory === "otros" ? "" : activeCategory;
+      if (!counts.has(activeKey)) activeCategory = "all";
+    }
+
+    const tab = (value, label, count) => {
+      const on = value === activeCategory;
+      return `<button type="button" role="tab" aria-selected="${on}" class="cat${
+        on ? " is-active" : ""
+      }" data-cat="${escapeHtml(value)}">${escapeHtml(label)}<span class="cat-count">${count}</span></button>`;
+    };
+
+    const chips = [tab("all", "Todo", procedures.length)];
+    present.forEach((k) => chips.push(tab(k || "otros", categoryLabel(k), counts.get(k))));
+    el.categoryNav.innerHTML = chips.join("");
+  }
+
+  function serviceCard(p) {
+    const selected = p.id === sel.procedureId;
+    const meta = `${p.duration} min`;
+    return `<button type="button" role="radio" aria-checked="${selected}" class="service${
+      selected ? " is-selected" : ""
+    }" data-service="${escapeHtml(p.id)}">
+        <span class="service-radio" aria-hidden="true"></span>
+        <span class="service-body">
+          <span class="service-name">${escapeHtml(p.name)}</span>
+          <span class="service-meta">${escapeHtml(meta)}</span>
+        </span>
+        ${p.price > 0 ? `<span class="service-price">${escapeHtml(money(p.price))}</span>` : ""}
+      </button>`;
+  }
+
+  function renderServiceList(procedures) {
+    const q = fold(serviceSearchText.trim());
+    const list = procedures.filter(
+      (p) => matchesCategory(p) && (!q || fold(p.name).includes(q) || fold(p.area).includes(q))
+    );
+
+    if (!list.length) {
+      el.serviceGroup.innerHTML = `<p class="services-empty">${
+        q ? "No encontramos ese servicio. Prueba con otra palabra." : "No hay servicios en esta categoria."
+      }</p>`;
+      return;
+    }
+
+    // En "Todo" y sin buscar, se agrupan por categoria con su encabezado; asi la
+    // lista larga se lee de un vistazo. Filtrada o buscando, va como lista plana.
+    if (activeCategory === "all" && !q) {
+      el.serviceGroup.innerHTML = CATEGORY_ORDER.map((cat) => {
+        const items = list.filter((p) => (p.category || "") === cat);
+        if (!items.length) return "";
+        return `<div class="service-cat">${escapeHtml(categoryLabel(cat))}</div>${items
+          .map(serviceCard)
+          .join("")}`;
+      }).join("");
+    } else {
+      el.serviceGroup.innerHTML = list.map(serviceCard).join("");
+    }
   }
 
   /* --- Tira de dias ---------------------------------------------------- */
@@ -436,6 +569,9 @@
     sel.specialist = "";
     sel.date = "";
     sel.time = "";
+    activeCategory = "all";
+    serviceSearchText = "";
+    if (el.serviceSearch) el.serviceSearch.value = "";
     el.slots.innerHTML = "";
     el.slotsEmpty.textContent = "Elige primero un dia.";
     el.dayHint.textContent = "";
@@ -484,10 +620,33 @@
       s.classList.toggle("is-selected", active);
       s.setAttribute("aria-checked", String(active));
     });
-    // Cambiar de servicio cambia la duracion: los horarios se recalculan.
+    // Cambiar de servicio cambia el tipo de especialista que lo atiende: se
+    // vuelve a armar la lista de especialistas filtrada por ese servicio.
+    fillSpecialists();
+    // Cambiar de servicio tambien cambia la duracion: los horarios se recalculan.
     if (sel.date) loadSlots();
     else refresh();
   });
+
+  // Filtro por categoria: cambia la pestaña activa y vuelve a pintar la lista.
+  if (el.categoryNav) {
+    el.categoryNav.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-cat]");
+      if (!button) return;
+      activeCategory = button.dataset.cat || "all";
+      const procedures = branch()?.procedures || [];
+      renderCategoryNav(procedures);
+      renderServiceList(procedures);
+    });
+  }
+
+  // Busqueda en vivo. La lista se re-pinta a cada tecla; no toca la seleccion.
+  if (el.serviceSearch) {
+    el.serviceSearch.addEventListener("input", () => {
+      serviceSearchText = el.serviceSearch.value;
+      renderServiceList(branch()?.procedures || []);
+    });
+  }
 
   if (el.specialistGroup) {
     el.specialistGroup.addEventListener("click", (event) => {

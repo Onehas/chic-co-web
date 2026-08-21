@@ -126,9 +126,10 @@ const moduleWriteCollections = {
   planes: ["plans", "activeProcedures", "appointments"],
   citas: ["appointments", "activeProcedures"],
   facturacion: ["invoices", "products", "stockMovements"],
+  proveedores: ["payables"],
   usuarios: ["users"]
 };
-const branchDataCollections = ["clients", "products", "procedures", "activeProcedures", "plans", "appointments", "invoices", "stockMovements", "locations", "stations"];
+const branchDataCollections = ["clients", "products", "procedures", "activeProcedures", "plans", "appointments", "invoices", "stockMovements", "locations", "stations", "payables"];
 const auditLogLimit = 300;
 
 const mimeTypes = {
@@ -164,13 +165,21 @@ const pixelConnectHosts =
   "https://www.facebook.com https://www.google-analytics.com https://analytics.google.com https://*.analytics.google.com https://*.google-analytics.com https://analytics.tiktok.com https://*.tiktok.com";
 const pixelImgHosts = "https://www.facebook.com https://www.google-analytics.com https://*.google-analytics.com https://analytics.tiktok.com";
 
+// La pagina publica usa Google Fonts (Fraunces + Inter). La hoja de estilos
+// viene de fonts.googleapis.com y los archivos .woff2 de fonts.gstatic.com; sin
+// abrir esos hosts el navegador bloquea la tipografia y todo cae a las fuentes
+// del sistema. Solo se permiten aqui: el back-office sigue con 'self' estricto.
+const fontStyleHost = "https://fonts.googleapis.com";
+const fontFileHost = "https://fonts.gstatic.com";
+
 function contentSecurityPolicy(pathname) {
   if (pathname === "/reservar.html" || pathname === "/reservar") {
     return [
       "default-src 'self'",
       `script-src 'self' 'unsafe-inline' ${pixelScriptHosts}`,
-      "style-src 'self' 'unsafe-inline'",
-      `img-src 'self' data: ${pixelImgHosts}`,
+      `style-src 'self' 'unsafe-inline' ${fontStyleHost}`,
+      `font-src 'self' ${fontFileHost}`,
+      `img-src 'self' data: blob: ${pixelImgHosts}`,
       `connect-src 'self' ${pixelConnectHosts}`,
       "object-src 'none'",
       "base-uri 'self'",
@@ -178,7 +187,9 @@ function contentSecurityPolicy(pathname) {
       "form-action 'self'"
     ].join("; ");
   }
-  return "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'";
+  // blob: es necesario para mostrar fotos (producto, factura, comprobante): se
+  // descargan autenticadas y se pintan desde un URL de objeto en memoria.
+  return "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'";
 }
 
 function requestPathname(req) {
@@ -604,7 +615,7 @@ function userCanAccessBranch(user, branchId) {
 // Datos de planilla / RRHH (comisiones, beneficios usados, vacaciones). Son
 // datos sensibles del personal: viven en el nivel superior del estado (no son
 // de una sucursal) y solo los ve y los toca quien tenga acceso explicito.
-const payrollCollections = ["commissions", "benefits", "vacations"];
+const payrollCollections = ["staff", "commissions", "benefits", "vacations"];
 
 // Acceso a planilla: siempre el super, y cualquier cuenta a la que el super le
 // haya puesto payrollAccess. Un administrador NO lo tiene por su rol: la
@@ -735,9 +746,27 @@ function addAuditEntry(state, user, action, collections = []) {
   state.auditLog = [entry, ...auditLog].slice(0, auditLogLimit);
 }
 
+// Umbral de "vaciado masivo": si una coleccion de datos de sucursal tenia al
+// menos estos registros y el guardado la dejaria en cero, se sospecha de un bug
+// del navegador (la app borra de a un registro, no en bloque) y se CONSERVA lo
+// guardado. El borrado real de pocos registros sigue funcionando. Es una red
+// extra a favor de "que nada se borre".
+const wipeGuardThreshold = 3;
+
+function wouldWipeBranchCollection(collectionName, currentList, nextList) {
+  if (!branchDataCollections.includes(collectionName)) return false;
+  return (
+    Array.isArray(currentList) &&
+    currentList.length >= wipeGuardThreshold &&
+    Array.isArray(nextList) &&
+    nextList.length === 0
+  );
+}
+
 function applyAllowedCollections(mergedState, nextState, collectionNames) {
   collectionNames.forEach((collectionName) => {
     if (Array.isArray(nextState?.[collectionName])) {
+      if (wouldWipeBranchCollection(collectionName, mergedState[collectionName], nextState[collectionName])) return;
       mergedState[collectionName] = cloneValue(nextState[collectionName]);
     }
   });
@@ -760,6 +789,7 @@ function applyAllowedBranchCollections(mergedState, nextState, collectionNames, 
     mergedState.branches[branchId] = mergedState.branches[branchId] || {};
     collectionNames.forEach((collectionName) => {
       if (Array.isArray(nextBranch[collectionName])) {
+        if (wouldWipeBranchCollection(collectionName, mergedState.branches[branchId][collectionName], nextBranch[collectionName])) return;
         mergedState.branches[branchId][collectionName] = cloneValue(nextBranch[collectionName]);
       }
     });
@@ -805,8 +835,20 @@ function clampUserRoles(nextUsers, currentState, requester) {
     // cuenta nueva): nadie que no sea super se da acceso a RRHH ni se lo da a otro.
     const clampPayroll = (user) =>
       requesterIsSuper ? user : { ...user, payrollAccess: current ? current.payrollAccess === true : false };
+    // Un no-super no puede PAUSAR (ni reactivar) una cuenta elevada (super o
+    // admin) ni la cuenta raiz: si pudiera, un admin dejaria fuera al super
+    // enviando su cuenta con active:false y se quedaria como unica cuenta con
+    // mando. `active` se fuerza al valor guardado en esos casos.
+    const clampActive = (user) => {
+      if (requesterIsSuper || !current) return user;
+      if (elevatedRoles.has(current.role) || user.id === "USR-000") {
+        return { ...user, active: current.active };
+      }
+      return user;
+    };
+    const clamp = (user) => clampActive(clampPayroll(user));
     if (requester && candidate.id === requester.id && current) {
-      return clampPayroll({ ...candidate, role: current.role, permissions: current.permissions });
+      return clamp({ ...candidate, role: current.role, permissions: current.permissions });
     }
     // Solo un super puede INTRODUCIR o ELEVAR a super/admin. Pero si el rol
     // enviado es elevado y coincide con el ya guardado, no es una elevacion: no
@@ -814,11 +856,11 @@ function clampUserRoles(nextUsers, currentState, requester) {
     // usuarios, cualquier guardado de un no-super (o de un admin, que tampoco es
     // super) degradaba a recepcion a TODOS los admin/super existentes.
     if (!requesterIsSuper && elevatedRoles.has(candidate.role)) {
-      if (current && current.role === candidate.role) return clampPayroll(candidate);
+      if (current && current.role === candidate.role) return clamp(candidate);
       const safeRole = current && !elevatedRoles.has(current.role) ? current.role : "recepcion";
-      return clampPayroll({ ...candidate, role: safeRole });
+      return clamp({ ...candidate, role: safeRole });
     }
-    return clampPayroll(candidate);
+    return clamp(candidate);
   });
 }
 
@@ -942,6 +984,9 @@ function applySystemUserAuth(state) {
       const { passwordHash: seedHash, ...pinned } = auth;
       const merged = { ...user, ...pinned };
       if (seedHash && !user.passwordHash) merged.passwordHash = seedHash;
+      // La cuenta raiz nunca queda pausada: si algun guardado la desactivo, se
+      // reactiva aqui. Es la ultima garantia contra un bloqueo total de super.
+      if (user.id === "USR-000") merged.active = true;
       return merged;
     })
   };
@@ -1044,8 +1089,14 @@ function assertPersistableState(nextState) {
   if (!Array.isArray(nextState.users) || !nextState.users.length) {
     throw invalid("Estado invalido: no se puede guardar sin usuarios.");
   }
-  if (!nextState.branches || typeof nextState.branches !== "object" || Array.isArray(nextState.branches)) {
+  if (!nextState.branches || typeof nextState.branches !== "object" || Array.isArray(nextState.branches) || !Object.keys(nextState.branches).length) {
     throw invalid("Estado invalido: faltan las sucursales.");
+  }
+  // Siempre debe quedar al menos un super activo, o nadie podria volver a
+  // administrar la instancia (crear cuentas, elevar roles, respaldos). Es la
+  // ultima barrera contra un bloqueo total, ademas de las de clampUserRoles.
+  if (!nextState.users.some((user) => user?.active !== false && user?.role === "super")) {
+    throw invalid("Estado invalido: debe quedar al menos un super usuario activo.");
   }
   return nextState;
 }
@@ -1417,6 +1468,18 @@ function referencedImageIds(state) {
   collect(state?.products);
   Object.values(state?.branches || {}).forEach((branch) => collect(branch?.products));
 
+  // Adjuntos de cuentas por pagar (factura y comprobante). Sin esto, la
+  // recoleccion de huerfanas los borraria una hora despues de adjuntarlos.
+  const collectPayables = (payables) => {
+    if (!Array.isArray(payables)) return;
+    payables.forEach((item) => {
+      if (item?.facturaImageId) ids.add(String(item.facturaImageId));
+      if (item?.comprobanteImageId) ids.add(String(item.comprobanteImageId));
+    });
+  };
+  collectPayables(state?.payables);
+  Object.values(state?.branches || {}).forEach((branch) => collectPayables(branch?.payables));
+
   // El logotipo del negocio tambien vive en el almacen de imagenes. Sin esto,
   // la recoleccion de huerfanas lo borraria una hora despues de subirlo, porque
   // ningun producto lo referencia.
@@ -1428,9 +1491,10 @@ async function handleMediaUpload(req, res, session) {
   const state = await ensureState();
   const user = sessionUserFromState(state, session);
 
-  // Subir una foto de producto es escribir en inventario.
-  if (!canWriteModule(user, "inventario") && !isFullAccessUser(user)) {
-    sendError(req, res, 403, "Este usuario no puede modificar el inventario.");
+  // Subir una imagen es escribir en inventario (foto de producto) o en cuentas
+  // por pagar (adjuntar factura/comprobante de un proveedor).
+  if (!canWriteModule(user, "inventario") && !canWriteModule(user, "proveedores") && !isFullAccessUser(user)) {
+    sendError(req, res, 403, "Este usuario no puede subir imagenes.");
     return;
   }
 
@@ -1440,7 +1504,7 @@ async function handleMediaUpload(req, res, session) {
     saved = await mediaStore.saveImage({
       dataUrl: payload.dataUrl,
       branchId: payload.branchId,
-      kind: "product",
+      kind: payload.kind === "payable" ? "payable" : "product",
       ownerId: payload.ownerId,
       userId: user.id
     });
@@ -1676,6 +1740,13 @@ async function handlePublicBooking(req, res, url) {
     const specialist = String(payload.specialist || "").trim();
     if (!publicBooking.isKnownSpecialist(state, branchId, specialist)) {
       sendError(req, res, 400, "Esa especialista no atiende en esta sucursal.");
+      return;
+    }
+    // La especialista elegida debe poder hacer el servicio (su categoria coincide
+    // con la del procedimiento). Evita agendar, por manipulacion del formulario,
+    // a una manicurista para un facial.
+    if (!publicBooking.specialistDoesProcedure(state, branchId, specialist, procedure)) {
+      sendError(req, res, 400, "Esa especialista no realiza este servicio.");
       return;
     }
 
@@ -2422,6 +2493,75 @@ async function handleApi(req, res, url) {
     }
 
     broadcastStateUpdated(session, collections);
+    sendJson(req, res, 200, { ok: true });
+    return;
+  }
+
+  // Empezar de cero: borra TODOS los datos operativos (clientes, inventario,
+  // procedimientos, citas, facturas, planes, movimientos, planilla y
+  // solicitudes de reserva) y deja las sucursales vacias. CONSERVA las cuentas
+  // de usuario, la identidad del negocio (branding) y la bitacora. Solo super.
+  if (pathname === "/api/reset" && req.method === "POST") {
+    const currentUser0 = sessionUserFromState(await ensureState(), session);
+    if (!isSuperUser(currentUser0)) {
+      sendError(req, res, 403, "Solo un super usuario puede borrar todos los datos.");
+      return;
+    }
+    // Doble confirmacion explicita: el cuerpo debe traer confirm:"BORRAR".
+    const payload = await readJsonBody(req);
+    if (String(payload.confirm || "") !== "BORRAR") {
+      sendError(req, res, 400, "Confirmacion invalida.");
+      return;
+    }
+
+    try {
+      await withStateLock(async () => {
+        const freshState = await ensureState();
+        const emptyBranches = Object.keys(freshState.branches || {}).reduce((branches, branchId) => {
+          branches[branchId] = emptyBranchData();
+          return branches;
+        }, {});
+        // Si por alguna razon no hubiera sucursales, se recrean las conocidas.
+        if (!Object.keys(emptyBranches).length) {
+          branchIds.forEach((id) => (emptyBranches[id] = emptyBranchData()));
+        }
+        const resetState = {
+          ...emptyBranchData(), // espejo de nivel superior vacio
+          currentBranchId: freshState.currentBranchId || branchIds[0],
+          currentUserId: freshState.currentUserId,
+          users: freshState.users, // se conservan las cuentas
+          branding: freshState.branding, // y la identidad del negocio
+          staff: [],
+          commissions: [],
+          benefits: [],
+          vacations: [],
+          branches: emptyBranches,
+          auditLog: Array.isArray(freshState.auditLog) ? freshState.auditLog : []
+        };
+        addAuditEntry(resetState, currentUser0, "state.reset", [...branchDataCollections, ...payrollCollections]);
+        // Las tablas overlay nunca borran solas: hay que purgarlas o los datos
+        // rehidratarian el estado que acabamos de vaciar.
+        for (const collection of overlayCollections) {
+          try {
+            await collectionStore.purge(collection);
+          } catch (error) {
+            console.error(`No se pudo purgar ${collection} al empezar de cero:`, error.message);
+          }
+        }
+        await writeState(stampRevision(resetState, freshState));
+      });
+      // Las solicitudes de reserva viven en su propia tabla.
+      try {
+        await bookingStore.purgeAll();
+      } catch (error) {
+        console.error("No se pudieron borrar las solicitudes de reserva:", error.message);
+      }
+    } catch (error) {
+      sendError(req, res, error.statusCode || 500, error.message || "No se pudo borrar los datos.");
+      return;
+    }
+
+    broadcastStateUpdated(session, [...branchDataCollections, ...payrollCollections]);
     sendJson(req, res, 200, { ok: true });
     return;
   }

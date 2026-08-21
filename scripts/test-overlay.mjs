@@ -102,6 +102,26 @@ assert.equal(
   "y NO se filtra a la otra sucursal"
 );
 
+/* --- Purga: empezar de cero borra el overlay de verdad --------------- */
+
+const purgeState = {
+  currentBranchId: "rohrmoser",
+  branches: {
+    rohrmoser: { stockMovements: [{ id: "PG-1", type: "Entrada" }, { id: "PG-2", type: "Salida" }] },
+    alajuela: { stockMovements: [{ id: "PG-3", type: "Entrada" }] }
+  }
+};
+await overlay.absorb(purgeState, "stockMovements");
+const beforePurge = { branches: { rohrmoser: {}, alajuela: {} } };
+await overlay.hydrate(beforePurge, "stockMovements");
+assert.ok(beforePurge.branches.rohrmoser.stockMovements.length >= 2, "hay movimientos antes de purgar");
+
+await overlay.purge("stockMovements");
+const afterPurge = { branches: { rohrmoser: {}, alajuela: {} } };
+await overlay.hydrate(afterPurge, "stockMovements");
+assert.equal(afterPurge.branches.rohrmoser.stockMovements.length, 0, "la purga vacia el overlay (rohrmoser)");
+assert.equal(afterPurge.branches.alajuela.stockMovements.length, 0, "y tambien alajuela");
+
 /* --- Respaldo automatico --------------------------------------------- */
 
 assert.equal(await backup.count(), 0, "arranca sin respaldos");

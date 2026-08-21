@@ -20,6 +20,10 @@ const keepCount = Number(process.env.CHIC_BACKUP_KEEP || 30);
 
 let pgPool = null;
 let pgReady = false;
+// Contador para desempatar respaldos escritos en el mismo milisegundo. Sin el,
+// en una maquina rapida (o Node moderno) dos respaldos seguidos generaban el
+// mismo nombre de archivo y el segundo pisaba al primero.
+let snapshotSeq = 0;
 
 async function pool() {
   if (!databaseUrl) return null;
@@ -62,7 +66,11 @@ async function snapshot(state, label = "") {
 
   await fs.mkdir(backupDir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  await fs.writeFile(path.join(backupDir, `state-${stamp}.json`), JSON.stringify(state, null, 2), "utf8");
+  // Sufijo secuencial (4 digitos) para que dos respaldos en el mismo
+  // milisegundo no compartan nombre y se pisen. Mantiene el orden cronologico.
+  snapshotSeq = (snapshotSeq + 1) % 10000;
+  const unique = `${stamp}-${String(snapshotSeq).padStart(4, "0")}`;
+  await fs.writeFile(path.join(backupDir, `state-${unique}.json`), JSON.stringify(state, null, 2), "utf8");
   const files = (await fs.readdir(backupDir)).filter((name) => name.startsWith("state-")).sort();
   const excess = files.slice(0, Math.max(0, files.length - keepCount));
   await Promise.all(excess.map((name) => fs.unlink(path.join(backupDir, name)).catch(() => {})));
