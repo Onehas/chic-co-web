@@ -165,12 +165,20 @@ const pixelConnectHosts =
   "https://www.facebook.com https://www.google-analytics.com https://analytics.google.com https://*.analytics.google.com https://*.google-analytics.com https://analytics.tiktok.com https://*.tiktok.com";
 const pixelImgHosts = "https://www.facebook.com https://www.google-analytics.com https://*.google-analytics.com https://analytics.tiktok.com";
 
+// La pagina publica usa Google Fonts (Fraunces + Inter). La hoja de estilos
+// viene de fonts.googleapis.com y los archivos .woff2 de fonts.gstatic.com; sin
+// abrir esos hosts el navegador bloquea la tipografia y todo cae a las fuentes
+// del sistema. Solo se permiten aqui: el back-office sigue con 'self' estricto.
+const fontStyleHost = "https://fonts.googleapis.com";
+const fontFileHost = "https://fonts.gstatic.com";
+
 function contentSecurityPolicy(pathname) {
   if (pathname === "/reservar.html" || pathname === "/reservar") {
     return [
       "default-src 'self'",
       `script-src 'self' 'unsafe-inline' ${pixelScriptHosts}`,
-      "style-src 'self' 'unsafe-inline'",
+      `style-src 'self' 'unsafe-inline' ${fontStyleHost}`,
+      `font-src 'self' ${fontFileHost}`,
       `img-src 'self' data: blob: ${pixelImgHosts}`,
       `connect-src 'self' ${pixelConnectHosts}`,
       "object-src 'none'",

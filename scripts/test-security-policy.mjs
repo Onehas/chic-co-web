@@ -401,9 +401,14 @@ const publicCsp = contentSecurityPolicy("/reservar.html");
 assert.ok(publicCsp.includes("connect.facebook.net"), "reservar permite el script de Meta");
 assert.ok(publicCsp.includes("googletagmanager.com"), "reservar permite el script de GA4");
 assert.ok(publicCsp.includes("analytics.tiktok.com"), "reservar permite el script de TikTok");
+// La pagina de reservas carga Google Fonts (Fraunces + Inter): sin estos hosts
+// la tipografia queda bloqueada y todo cae a fuentes del sistema.
+assert.ok(/style-src[^;]*fonts\.googleapis\.com/.test(publicCsp), "reservar permite la hoja de Google Fonts");
+assert.ok(/font-src[^;]*fonts\.gstatic\.com/.test(publicCsp), "reservar permite los archivos de Google Fonts");
 
 const backofficeCsp = contentSecurityPolicy("/index.html");
 assert.ok(backofficeCsp.includes("connect-src 'self'"), "el back-office mantiene connect-src estricto");
 assert.ok(!/facebook|tiktok|googletagmanager/.test(backofficeCsp), "el back-office no abre hosts de pixeles");
+assert.ok(!/gstatic|googleapis/.test(backofficeCsp), "el back-office no abre hosts de fuentes externas");
 
 console.log("Security policy tests passed");
