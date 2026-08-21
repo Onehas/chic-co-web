@@ -101,6 +101,47 @@ assert.equal(
 const placeSuper = applyWritePolicy(placeNext, placeCurrent, { userId: "USR-000" });
 assert.equal(placeSuper.locations[0].name, "Renombrada por recepcion", "el super usuario si puede renombrarlas");
 
+/* --- Roster de personal: solo super/admin/gerente ----------------------- */
+
+// El roster (coleccion `specialists`) lo administra el modulo "personal". Una
+// recepcion no lo tiene: no puede sembrar ni tocar el personal de la sucursal.
+const rosterCurrent = baseState();
+rosterCurrent.specialists = [{ id: "SPC-1", name: "Original" }];
+rosterCurrent.branches.rohrmoser.specialists = [{ id: "SPC-1", name: "Original" }];
+const rosterNext = structuredClone(rosterCurrent);
+rosterNext.specialists = [{ id: "SPC-1", name: "Cambiada por recepcion" }];
+rosterNext.branches.rohrmoser.specialists = rosterNext.specialists;
+
+const rosterAsReception = applyWritePolicy(rosterNext, rosterCurrent, { userId: "USR-003" });
+assert.equal(
+  rosterAsReception.branches.rohrmoser.specialists[0].name,
+  "Original",
+  "recepcion no puede tocar el roster de personal"
+);
+
+// Una gerente si puede (tiene el modulo personal).
+const rosterMgrCurrent = baseState();
+rosterMgrCurrent.specialists = [{ id: "SPC-1", name: "Original" }];
+rosterMgrCurrent.branches.rohrmoser.specialists = [{ id: "SPC-1", name: "Original" }];
+rosterMgrCurrent.users.push({
+  id: "USR-050",
+  name: "Gerenta",
+  role: "gerente",
+  active: true,
+  passwordHash: "ger-hash",
+  branchScope: "rohrmoser",
+  permissions: { ...allPermissions, personal: { read: true, write: true } }
+});
+const rosterMgrNext = structuredClone(rosterMgrCurrent);
+rosterMgrNext.specialists = [{ id: "SPC-1", name: "Cambiada por gerente" }];
+rosterMgrNext.branches.rohrmoser.specialists = rosterMgrNext.specialists;
+const rosterAsManager = applyWritePolicy(rosterMgrNext, rosterMgrCurrent, { userId: "USR-050" });
+assert.equal(
+  rosterAsManager.branches.rohrmoser.specialists[0].name,
+  "Cambiada por gerente",
+  "la gerente si puede administrar el roster de su sucursal"
+);
+
 // La foto de un producto viaja como referencia, nunca como bytes dentro del
 // estado: el estado completo se envia en cada guardado.
 const photoCurrent = baseState();

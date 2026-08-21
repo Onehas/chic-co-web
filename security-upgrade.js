@@ -159,6 +159,23 @@
   }
 
   function branchSpecialistList() {
+    // Fuente de verdad: el roster editable del modulo Personal (coleccion
+    // `specialists` por sucursal), con los traslados temporales del dia. Si esa
+    // sede aun no armo su roster, se cae a la lista real por defecto para que la
+    // agenda nunca quede vacia. Asi el personal deja de estar quemado en el
+    // codigo: lo que edite la gerencia manda.
+    try {
+      const branch = activeBranchId();
+      if (typeof rosterForBranchOn === "function") {
+        const today = typeof todayISO === "function" ? todayISO() : "";
+        const roster = rosterForBranchOn(branch, today);
+        if (Array.isArray(roster) && roster.length) {
+          return roster.map((person) => ({ name: person.name, focus: person.category || "" }));
+        }
+      }
+    } catch (error) {
+      /* si el roster no esta disponible, se usa el respaldo */
+    }
     const specialists = realSpecialistsByBranch[activeBranchId()] || realSpecialistsByBranch.rohrmoser;
     return specialists.map((specialist) => ({ ...specialist }));
   }

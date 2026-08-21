@@ -2623,3 +2623,19 @@ th.num {
 .pay-pay { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .pay-pay select { border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); padding: 5px 8px; border-radius: 8px; font-size: 12px; }
 .pay-actions { gap: 6px; flex-wrap: wrap; }
+
+/* --- Modulo Personal: roster editable ---------------------------------- */
+.roster-services { margin: 4px 0 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }
+.roster-services legend { padding: 0 4px; font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.roster-services legend .payroll-sub { display: block; font-weight: 400; font-size: 11.5px; color: var(--ink-3); }
+.roster-services-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 6px 14px; margin-top: 8px; max-height: 220px; overflow-y: auto; }
+.roster-service { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink); }
+.roster-service input { flex: none; }
+.roster-service em { color: var(--ink-3); font-style: normal; font-size: 11.5px; }
+.roster-login { display: flex; flex-direction: row; align-items: center; gap: 8px; margin: 6px 0 4px; font-size: 13px; }
+.roster-login input { flex: none; width: auto; }
+.roster-move-panel { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+.roster-move-panel h4 { margin: 0 0 10px; font-size: 14px; font-weight: 600; }
+.roster-move { background: var(--surface-2); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+.roster-moves { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 8px; }
+.roster-moves li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; font-size: 13px; }

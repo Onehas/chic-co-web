@@ -127,9 +127,10 @@ const moduleWriteCollections = {
   citas: ["appointments", "activeProcedures"],
   facturacion: ["invoices", "products", "stockMovements"],
   proveedores: ["payables"],
+  personal: ["specialists"],
   usuarios: ["users"]
 };
-const branchDataCollections = ["clients", "products", "procedures", "activeProcedures", "plans", "appointments", "invoices", "stockMovements", "locations", "stations", "payables"];
+const branchDataCollections = ["clients", "products", "procedures", "activeProcedures", "plans", "appointments", "invoices", "stockMovements", "locations", "stations", "payables", "specialists"];
 const auditLogLimit = 300;
 
 const mimeTypes = {
@@ -1676,7 +1677,7 @@ async function handlePublicBooking(req, res, url) {
       return;
     }
     const specialist = String(url.searchParams.get("specialist") || "").trim();
-    if (!publicBooking.isKnownSpecialist(state, branchId, specialist)) {
+    if (!publicBooking.isKnownSpecialist(state, branchId, specialist, date)) {
       sendError(req, res, 400, "Esa especialista no atiende en esta sucursal.");
       return;
     }
@@ -1738,7 +1739,7 @@ async function handlePublicBooking(req, res, url) {
     // Especialista elegida (opcional). Debe pertenecer a la sucursal; si no, se
     // rechaza para que nadie inyecte un nombre arbitrario en la agenda.
     const specialist = String(payload.specialist || "").trim();
-    if (!publicBooking.isKnownSpecialist(state, branchId, specialist)) {
+    if (!publicBooking.isKnownSpecialist(state, branchId, specialist, date)) {
       sendError(req, res, 400, "Esa especialista no atiende en esta sucursal.");
       return;
     }

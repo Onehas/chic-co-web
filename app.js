@@ -5,7 +5,7 @@ const fallbackPasswordHash = "d3ad9315b7be5dd53b31a273b3b3aba5defe700808305aa16a
 const receptionPasswordHash = "5813f24ae4432b277c8c92a78bf035caaa8f5a9ad0031441f5eccd2d4c0e2fd0";
 const monicaPasswordHash = "e7d081ee45073bc0da9fd633a609db90be0adc2abac6ac47e79e375544e81c22";
 
-const permissionModules = ["clientes", "inventario", "procedimientos", "enCurso", "planes", "citas", "facturacion", "proveedores", "usuarios"];
+const permissionModules = ["clientes", "inventario", "procedimientos", "enCurso", "planes", "citas", "facturacion", "proveedores", "personal", "usuarios"];
 
 const moduleNames = {
   clientes: "Clientes",
@@ -41,8 +41,8 @@ const rolePresets = {
   gerente: {
     label: "Gerente",
     permissions: buildPermissions(
-      ["clientes", "inventario", "procedimientos", "enCurso", "planes", "citas", "facturacion", "proveedores"],
-      ["clientes", "inventario", "citas", "facturacion", "proveedores"]
+      ["clientes", "inventario", "procedimientos", "enCurso", "planes", "citas", "facturacion", "proveedores", "personal"],
+      ["clientes", "inventario", "citas", "facturacion", "proveedores", "personal"]
     )
   },
   recepcion: {
@@ -100,7 +100,7 @@ const systemUserAuth = {
   },
   "USR-004": {}
 };
-const branchDataKeys = ["clients", "products", "procedures", "activeProcedures", "plans", "appointments", "invoices", "stockMovements", "locations", "stations", "payables"];
+const branchDataKeys = ["clients", "products", "procedures", "activeProcedures", "plans", "appointments", "invoices", "stockMovements", "locations", "stations", "payables", "specialists"];
 
 const branchOptions = [
   { id: "rohrmoser", label: "Chic & Co Rohrmoser" },
@@ -184,7 +184,8 @@ function emptyBranchData() {
     stockMovements: [],
     locations: [],
     stations: [],
-    payables: []
+    payables: [],
+    specialists: []
   };
 }
 
@@ -252,6 +253,11 @@ const moduleConfig = {
     title: "Cuentas por pagar",
     description: "Facturas de proveedores por pagar: cargalas, adjunta factura y comprobante, y controla que ya se pagaron.",
     actions: [{ label: "Nueva factura por pagar", action: "focusForm" }]
+  },
+  personal: {
+    title: "Personal",
+    description: "El equipo de esta sucursal: categoria, servicios que ofrece, correo, acceso al sistema y traslados temporales a otra sede.",
+    actions: [{ label: "Agregar persona", action: "focusForm" }]
   },
   planilla: {
     title: "Planilla y RRHH",
@@ -1049,6 +1055,10 @@ function setModule(moduleName, options = {}) {
   currentModule = moduleName;
   if (!options.keepSearch) elements.searchInput.value = "";
 
+  // Al entrar a Personal por primera vez se siembra el roster (una sola vez).
+  // Se hace aqui -no al arrancar- para que sea sobre el estado real ya cargado.
+  if (moduleName === "personal") seedRosterIfNeeded();
+
   renderAll();
   closeDropdown();
 
@@ -1136,7 +1146,12 @@ function moduleMetrics(moduleName) {
     citas: [
       [state.appointments.length, "Citas"],
       [state.appointments.filter((appointment) => appointment.date === todayISO()).length, "Hoy"],
-      [procedureSpecialists.length, "Especialistas"]
+      [rosterForBranchOn(state.currentBranchId, todayISO()).length || procedureSpecialists.length, "Especialistas"]
+    ],
+    personal: [
+      [rosterList().filter((person) => person.active !== false).length, "En el equipo"],
+      [rosterList().filter((person) => person.userId).length, "Con acceso"],
+      [rosterList().filter((person) => (person.assignments || []).length).length, "Con traslado"]
     ],
     facturacion: [
       [state.invoices.length, "Facturas"],
@@ -1340,15 +1355,107 @@ function productOptions(selected = "") {
   ];
 }
 
+/* --- Personal / roster editable por sucursal ---------------------------
+ * El personal deja de estar quemado en el codigo: cada sucursal tiene su
+ * propio roster editable (coleccion `specialists`, con aislamiento por sede).
+ * De aqui salen las especialistas de la agenda y de la reserva publica. La
+ * lista `procedureSpecialists` queda solo como semilla y respaldo. */
+
+// Semilla: convierte la lista fija en fichas editables la primera vez.
+function defaultRoster() {
+  return procedureSpecialists.map((sp, index) => ({
+    id: `SPC-${String(index + 1).padStart(3, "0")}`,
+    name: sp.name,
+    category: sp.category || "",
+    email: "",
+    serviceAdd: [],
+    serviceRemove: [],
+    assignments: [],
+    userId: "",
+    active: true
+  }));
+}
+
+// Roster de la sucursal activa (esta espejado en el nivel superior de `state`).
+function rosterList() {
+  return Array.isArray(state.specialists) ? state.specialists.filter((person) => person && person.id) : [];
+}
+
+// Roster de una sucursal cualquiera. La activa se lee del nivel superior (ahi
+// viven los cambios sin guardar aun); las demas, de `state.branches`.
+function rosterOfBranch(branchId) {
+  const list =
+    branchId === state.currentBranchId
+      ? state.specialists
+      : state.branches?.[branchId]?.specialists;
+  return Array.isArray(list) ? list.filter((person) => person && person.id) : [];
+}
+
+// Sede efectiva de una persona en una fecha: si tiene un traslado temporal que
+// cubre ese dia, manda esa sede; si no, su sede base (donde vive su ficha).
+function personBranchOn(person, homeBranchId, dateISO) {
+  const day = String(dateISO || "").slice(0, 10);
+  if (!day) return homeBranchId;
+  const move = (person.assignments || []).find(
+    (item) => item && item.branch && String(item.from || "") <= day && day <= String(item.to || "")
+  );
+  return move ? move.branch : homeBranchId;
+}
+
+// Categoria de especialista que atiende un servicio (espeja backend/public-booking).
+const serviceToSpecialistCategory = {
+  facial: "esteticista", faciales: "esteticista", cabello: "estilista", color: "estilista",
+  laser: "esteticista", "láser": "esteticista", corporal: "esteticista", depilacion: "esteticista",
+  "depilación": "esteticista", masajes: "esteticista", tratamientos: "esteticista", cejas: "estilista",
+  maquillaje: "estilista", unas: "manicurista", "uñas": "manicurista"
+};
+function procedureCategory(procedure) {
+  const raw = String(procedure?.category || procedure?.area || "").trim().toLowerCase();
+  if (["estilista", "esteticista", "manicurista"].includes(raw)) return raw;
+  return serviceToSpecialistCategory[raw] || "";
+}
+
+// Una persona ofrece un servicio si esta en sus "servicios extra", o si su
+// categoria coincide con la del servicio y no lo tiene excluido. Sin categoria
+// de servicio, lo puede hacer cualquiera.
+function personOffersProcedure(person, procedure) {
+  if (!procedure) return true;
+  if ((person.serviceAdd || []).includes(procedure.id)) return true;
+  if ((person.serviceRemove || []).includes(procedure.id)) return false;
+  const category = procedureCategory(procedure);
+  if (!category) return true;
+  return (person.category || "") === category;
+}
+
+// Roster efectivo de una sucursal en una fecha: personas activas cuya sede
+// efectiva ese dia es esta sucursal (suma traslados entrantes, resta salientes).
+function rosterForBranchOn(branchId, dateISO) {
+  const people = [];
+  const seen = new Set();
+  branchOptions.forEach((branch) => {
+    rosterOfBranch(branch.id).forEach((person) => {
+      if (person.active === false) return;
+      if (personBranchOn(person, branch.id, dateISO) !== branchId) return;
+      const key = String(person.name || "").trim().toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      people.push(person);
+    });
+  });
+  return people;
+}
+
+// Opciones de especialista para la agenda de la sucursal activa. Si el roster
+// aun no se ha sembrado, cae a la lista semilla para no quedar vacia.
 function specialistOptions(selected = "") {
-  const savedSpecialist =
-    selected && !procedureSpecialists.some((specialist) => specialist.name === selected)
-      ? [{ name: selected, focus: "Agenda" }]
-      : [];
-  return [...savedSpecialist, ...procedureSpecialists].map((specialist) => ({
-    value: specialist.name,
-    label: specialist.name,
-    selected: specialist.name === selected
+  let names = rosterForBranchOn(state.currentBranchId, todayISO()).map((person) => person.name);
+  if (!names.length) names = procedureSpecialists.map((specialist) => specialist.name);
+  names = [...new Set(names.map((name) => String(name).trim()).filter(Boolean))];
+  if (selected && !names.includes(selected)) names = [selected, ...names];
+  return names.map((name, index) => ({
+    value: name,
+    label: name,
+    selected: selected ? name === selected : index === 0
   }));
 }
 
@@ -1662,12 +1769,14 @@ function currentMonthISO() {
 }
 
 // Nombres del personal para asignar comisiones/beneficios/vacaciones: cuentas
-// activas del sistema mas la lista de especialistas, sin repetir.
+// activas del sistema, la ficha de planilla y el roster de especialistas de las
+// sucursales visibles, sin repetir.
 function staffNames() {
   const fromStaff = (state.staff || []).map((item) => item.name);
   const fromUsers = (state.users || []).filter((user) => user.active).map((user) => user.name);
-  const fromSpecialists = procedureSpecialists.map((specialist) => specialist.name);
-  return [...new Set([...fromStaff, ...fromUsers, ...fromSpecialists].map((name) => String(name).trim()).filter(Boolean))].sort();
+  const fromRoster = branchOptions.flatMap((branch) => rosterOfBranch(branch.id).map((person) => person.name));
+  const seed = fromRoster.length ? [] : procedureSpecialists.map((specialist) => specialist.name);
+  return [...new Set([...fromStaff, ...fromUsers, ...fromRoster, ...seed].map((name) => String(name).trim()).filter(Boolean))].sort();
 }
 
 function staffOptions(selected = "") {
@@ -1840,6 +1949,158 @@ function removeStaff(id) {
   state.staff = staffList().filter((item) => item.id !== id);
   if (editingStaffId === id) editingStaffId = "";
   persistAndRender("Empleado eliminado");
+}
+
+/* --- Personal: roster editable de la sucursal activa -------------------- */
+
+// Persona del roster que se esta editando (id) en la vista de Personal.
+let editingRosterId = "";
+
+// Alta/edicion de una persona del roster de la sucursal activa. Si se pide
+// "crear acceso" y trae correo, se le crea (o vincula) una cuenta del sistema
+// atada a esta sucursal, sin contrasena: la persona la define con "¿Olvidaste
+// tu contraseña?" en el login (ninguna cuenta arranca con clave compartida).
+function saveRosterPerson(data) {
+  if (!requireWrite("personal")) return;
+  const name = String(data.name || "").trim();
+  if (!name) return showToast("Escribe el nombre de la persona");
+  const category = ["estilista", "esteticista", "manicurista"].includes(data.category) ? data.category : "";
+  const email = String(data.email || "").trim();
+  const editingId = String(data.rosterId || editingRosterId || "").trim();
+
+  if (!Array.isArray(state.specialists)) state.specialists = [];
+  const existing = editingId ? state.specialists.find((person) => person.id === editingId) : null;
+  const person = existing || {
+    id: nextId("SPC", state.specialists),
+    serviceAdd: [],
+    serviceRemove: [],
+    assignments: [],
+    userId: "",
+    active: true
+  };
+  person.name = name;
+  person.category = category;
+  person.email = email;
+
+  // "Afinar servicios": las casillas marcadas dicen que servicios ofrece. Se
+  // leen del DOM (FormData colapsa las casillas repetidas). Se guardan como
+  // excepciones respecto a su categoria:
+  //   - ofrece un servicio que NO es de su categoria -> serviceAdd
+  //   - NO ofrece un servicio que SI es de su categoria -> serviceRemove
+  const serviceBoxes = document.querySelectorAll("input[data-roster-service]");
+  if (serviceBoxes.length) {
+    const chosen = new Set([...serviceBoxes].filter((box) => box.checked).map((box) => box.value));
+    const add = [];
+    const remove = [];
+    (state.procedures || []).forEach((procedure) => {
+      const belongs = !procedureCategory(procedure) || procedureCategory(procedure) === category;
+      const offered = chosen.has(procedure.id);
+      if (offered && !belongs) add.push(procedure.id);
+      if (!offered && belongs) remove.push(procedure.id);
+    });
+    person.serviceAdd = add;
+    person.serviceRemove = remove;
+  }
+
+  if (!existing) state.specialists.push(person);
+
+  // Acceso al sistema: crea la cuenta la primera vez que se pide y hay correo.
+  if (data.createLogin === "true" && email && !person.userId) {
+    const already = (state.users || []).find((user) => String(user.email || "").trim().toLowerCase() === email.toLowerCase());
+    if (already) {
+      person.userId = already.id;
+    } else if (currentUser()?.role === "super" || currentUser()?.role === "admin" || currentUser()?.role === "gerente") {
+      const account = {
+        id: nextId("USR", state.users),
+        name,
+        email,
+        role: "especialista",
+        function: category ? `Especialista ${category}` : "Especialista",
+        branchScope: state.currentBranchId,
+        payrollAccess: false,
+        active: true,
+        passwordHash: "",
+        permissions: clone(rolePresets.especialista.permissions)
+      };
+      state.users.push(account);
+      person.userId = account.id;
+    }
+  }
+
+  editingRosterId = "";
+  persistAndRender(
+    existing
+      ? "Persona actualizada"
+      : person.userId
+        ? "Persona agregada. Pidele que entre con su correo y \"¿Olvidaste tu contraseña?\" para crear su clave."
+        : "Persona agregada"
+  );
+}
+
+function startEditRoster(id) {
+  editingRosterId = id;
+  renderView();
+}
+
+function toggleRosterActive(id) {
+  const person = rosterList().find((item) => item.id === id);
+  if (!person || !requireWrite("personal")) return;
+  person.active = person.active === false;
+  persistAndRender(person.active ? "Persona reactivada" : "Persona pausada");
+}
+
+function removeRosterPerson(id) {
+  const person = rosterList().find((item) => item.id === id);
+  if (!person || !requireWrite("personal")) return;
+  if (!confirm(`¿Quitar a ${person.name} del roster de esta sucursal?`)) return;
+  state.specialists = rosterList().filter((item) => item.id !== id);
+  if (editingRosterId === id) editingRosterId = "";
+  persistAndRender("Persona quitada del roster");
+}
+
+// Traslado temporal a otra sede por un rango de fechas.
+function addRosterAssignment(data) {
+  if (!requireWrite("personal")) return;
+  const person = rosterList().find((item) => item.id === String(data.rosterId || "").trim());
+  if (!person) return;
+  const branch = branchOptions.find((item) => item.id === data.branch && item.id !== state.currentBranchId);
+  if (!branch) return showToast("Elige una sucursal distinta a la actual");
+  const from = String(data.from || "").slice(0, 10);
+  const to = String(data.to || from).slice(0, 10);
+  if (!from) return showToast("Elige la fecha de inicio del traslado");
+  if (to < from) return showToast("La fecha final no puede ser antes de la inicial");
+  if (!Array.isArray(person.assignments)) person.assignments = [];
+  person.assignments.push({ id: nextId("MOV", person.assignments), branch: branch.id, from, to });
+  persistAndRender(`Traslado de ${person.name} a ${branch.label} guardado`);
+}
+
+function removeRosterAssignment(personId, assignmentId) {
+  const person = rosterList().find((item) => item.id === personId);
+  if (!person || !requireWrite("personal")) return;
+  person.assignments = (person.assignments || []).filter((item) => item.id !== assignmentId);
+  persistAndRender("Traslado eliminado");
+}
+
+// Siembra el roster de la sucursal ACTIVA la primera vez: convierte la lista de
+// especialistas de la sede (hoy fija) en fichas editables. `defaultRoster()` sale
+// de `procedureSpecialists`, que ya viene ajustado a la sede activa. Solo corre
+// una vez por sede y navegador, y solo si esa sede aun no tiene roster propio
+// (para no re-sembrar tras un borrado intencional).
+function seedRosterIfNeeded() {
+  if (!currentUser() || !canWrite("personal")) return;
+  const branchId = state.currentBranchId;
+  if (!branchId || !state.branches?.[branchId]) return;
+  if (rosterOfBranch(branchId).length > 0) return;
+  const seedKey = `chic_roster_seeded_${branchId}`;
+  try {
+    if (localStorage.getItem(seedKey)) return;
+  } catch (error) { /* sin localStorage: se siembra igual */ }
+  const seed = defaultRoster();
+  if (!seed.length) return;
+  state.branches[branchId].specialists = seed;
+  state.specialists = clone(seed);
+  try { localStorage.setItem(seedKey, "1"); } catch (error) { /* no critico */ }
+  saveState();
 }
 
 // Fija un ajuste de la quincena (bonos, feriados, horas, otros rebajos, estado).
@@ -2100,6 +2361,142 @@ const viewRenderers = {
       "Nueva factura por pagar",
       form,
       "Cuentas por pagar a proveedores",
+      records
+    );
+  },
+
+  personal(search) {
+    const editing = editingRosterId ? rosterList().find((person) => person.id === editingRosterId) : null;
+    const branchNow = branchOptions.find((branch) => branch.id === state.currentBranchId)?.label || "esta sucursal";
+    const categoryOptions = [
+      { value: "", label: "Sin categoria" },
+      { value: "estilista", label: "Estilista (cabello)" },
+      { value: "esteticista", label: "Esteticista (facial y corporal)" },
+      { value: "manicurista", label: "Manicurista (unas)" }
+    ];
+
+    // Casillas de servicios: marcadas segun lo que la persona ofrece hoy, o el
+    // default de su categoria si es nueva.
+    const stub = editing || { category: "", serviceAdd: [], serviceRemove: [] };
+    const serviceBoxes = (state.procedures || []).length
+      ? (state.procedures || [])
+          .map((procedure) => {
+            const offered = personOffersProcedure(stub, procedure);
+            const cat = procedureCategory(procedure);
+            return `<label class="roster-service"><input type="checkbox" data-roster-service value="${escapeHtml(procedure.id)}" ${
+              offered ? "checked" : ""
+            } /> <span>${escapeHtml(procedure.name)}${cat ? ` <em>· ${escapeHtml(cat)}</em>` : ""}</span></label>`;
+          })
+          .join("")
+      : `<p class="payroll-sub">Aun no hay servicios cargados. Agrega procedimientos para poder afinar quien hace que.</p>`;
+
+    const linkedUser = editing?.userId ? (state.users || []).find((user) => user.id === editing.userId) : null;
+    const loginBlock = linkedUser
+      ? `<p class="payroll-sub">Acceso al sistema: <strong>${escapeHtml(linkedUser.email || linkedUser.name)}</strong> (rol ${escapeHtml(roleLabel(linkedUser.role))}).</p>`
+      : `<label class="field roster-login"><input type="checkbox" name="createLogin" value="true" /> <span>Crear acceso al sistema con su correo (podra entrar y definir su clave)</span></label>`;
+
+    const form = `
+      <form class="data-form" data-form="rosterPerson" autocomplete="off">
+        <input type="hidden" name="rosterId" value="${escapeHtml(editing?.id || "")}" />
+        <div class="form-grid">
+          ${inputField("Nombre completo", "name", "text", editing?.name || "", "required")}
+          ${selectField("Categoria", "category", categoryOptions, editing?.category || "")}
+          ${inputField("Correo", "email", "email", editing?.email || "")}
+        </div>
+        <fieldset class="roster-services">
+          <legend>Servicios que ofrece <span class="payroll-sub">(por defecto los de su categoria; destilda o agrega los que quieras)</span></legend>
+          <div class="roster-services-grid">${serviceBoxes}</div>
+        </fieldset>
+        ${loginBlock}
+        <div class="payroll-form-actions">
+          <button class="primary-action" type="submit">${editing ? "Guardar cambios" : "Agregar al roster"}</button>
+          ${editing ? `<button class="secondary-action" type="button" data-roster-cancel>Cancelar</button>` : ""}
+        </div>
+      </form>`;
+
+    // Traslados temporales: solo al editar una persona y si hay otra sede.
+    const otherBranches = branchOptions.filter((branch) => branch.id !== state.currentBranchId);
+    const assignForm =
+      editing && otherBranches.length
+        ? `
+      <form class="data-form roster-move" data-form="rosterAssignment" autocomplete="off">
+        <input type="hidden" name="rosterId" value="${escapeHtml(editing.id)}" />
+        <div class="form-grid">
+          ${selectField("Trasladar a", "branch", otherBranches.map((branch) => ({ value: branch.id, label: branch.label })))}
+          ${inputField("Desde", "from", "date", "")}
+          ${inputField("Hasta", "to", "date", "")}
+        </div>
+        <button class="secondary-action" type="submit">Guardar traslado</button>
+      </form>`
+        : "";
+
+    const moveList =
+      editing && (editing.assignments || []).length
+        ? `<ul class="roster-moves">${(editing.assignments || [])
+            .map(
+              (move) =>
+                `<li><strong>${escapeHtml(branchLabel(move.branch))}</strong>: ${escapeHtml(move.from)} → ${escapeHtml(
+                  move.to
+                )} <button class="row-action is-warning" type="button" data-move-del="${escapeHtml(editing.id)}:${escapeHtml(
+                  move.id
+                )}">Quitar</button></li>`
+            )
+            .join("")}</ul>`
+        : editing
+          ? `<p class="payroll-sub">Sin traslados. Usa el formulario de arriba para mover a ${escapeHtml(editing.name)} a otra sede por unos dias.</p>`
+          : "";
+
+    const formWithMoves = editing
+      ? `${form}<section class="roster-move-panel"><h4>Traslados temporales</h4>${assignForm}${moveList}</section>`
+      : form;
+
+    const roster = rosterList().filter((person) => matchesSearch([person.name, person.category, person.email], search));
+    const today = todayISO();
+    const rows = roster.length
+      ? roster
+          .map((person) => {
+            const offered = (state.procedures || []).filter((procedure) => personOffersProcedure(person, procedure)).length;
+            const linked = person.userId ? (state.users || []).find((user) => user.id === person.userId) : null;
+            const movedNow = personBranchOn(person, state.currentBranchId, today);
+            const away = movedNow !== state.currentBranchId;
+            return `
+        <tr class="${person.active === false ? "is-muted-row" : ""}">
+          <td><strong>${escapeHtml(person.name)}</strong>${person.active === false ? ' <span class="dash-muted">(pausada)</span>' : ""}${
+              away ? ` <span class="dash-muted">· hoy en ${escapeHtml(branchLabel(movedNow))}</span>` : ""
+            }</td>
+          <td>${person.category ? escapeHtml(person.category) : '<span class="dash-muted">—</span>'}</td>
+          <td>${person.email ? escapeHtml(person.email) : '<span class="dash-muted">—</span>'}${linked ? ' <span class="dash-muted">· con acceso</span>' : ""}</td>
+          <td class="dash-num">${offered}</td>
+          <td>${(person.assignments || []).length || '<span class="dash-muted">—</span>'}</td>
+          <td>
+            <div class="inline-actions">
+              <button class="row-action" type="button" data-roster-edit="${escapeHtml(person.id)}">Editar</button>
+              <button class="row-action is-muted" type="button" data-roster-toggle="${escapeHtml(person.id)}">${
+              person.active === false ? "Activar" : "Pausar"
+            }</button>
+              <button class="row-action is-warning" type="button" data-roster-del="${escapeHtml(person.id)}">Quitar</button>
+            </div>
+          </td>
+        </tr>`;
+          })
+          .join("")
+      : `<tr><td colspan="6"><div class="empty-state">Aun no hay personal en ${escapeHtml(
+          branchNow
+        )}. Agrega a tu equipo con el formulario.</div></td></tr>`;
+
+    const records = `
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Nombre</th><th>Categoria</th><th>Correo / acceso</th><th class="dash-num">Servicios</th><th>Traslados</th><th>Accion</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+
+    return renderLayout(
+      moduleMetrics("personal"),
+      editing ? `Editar a ${editing.name}` : "Agregar persona",
+      formWithMoves,
+      `Equipo de ${branchNow}`,
       records
     );
   },
@@ -2688,7 +3085,7 @@ const viewRenderers = {
         <div class="form-grid">
           ${selectField("Cliente", "clientId", clientOptions(selectedClient), selectedClient, "required")}
           ${selectField("Procedimiento", "procedureId", procedureOptions(selectedProcedure), selectedProcedure, "required")}
-          ${selectField("Especialista", "specialist", specialistOptions("Andrea Morales"), "Andrea Morales", "required")}
+          ${selectField("Especialista", "specialist", specialistOptions(""), "", "required")}
           ${selectField("Estacion", "stationId", stationOptions(""), "")}
           ${inputField("Proxima accion", "next", "date", todayISO())}
           ${textareaField("Notas de la sesion", "notes")}
@@ -2816,7 +3213,7 @@ const viewRenderers = {
           ${selectField("Procedimiento", "procedureId", procedureOptions(selectedProcedure), selectedProcedure, "required")}
           ${inputField("Fecha", "date", "date", selectedAgendaDate || todayISO(), "required")}
           ${inputField("Hora", "time", "time", "10:00", "required")}
-          ${selectField("Especialista", "specialist", specialistOptions("Andrea Morales"), "Andrea Morales", "required")}
+          ${selectField("Especialista", "specialist", specialistOptions(""), "", "required")}
           ${selectField("Estado", "status", [
             { value: "Pendiente", label: "Pendiente" },
             { value: "Confirmada", label: "Confirmada" },
@@ -2893,7 +3290,7 @@ const viewRenderers = {
             { value: "Estetica", label: "Estetica - tratamientos" }
           ], defaultArea, "required")}
           ${selectField("Procedimiento", "procedureId", procedureOptions(selectedProcedure), selectedProcedure, "required")}
-          ${selectField("Colaborador", "collaborator", specialistOptions("Andrea Morales"), "Andrea Morales", "required")}
+          ${selectField("Colaborador", "collaborator", specialistOptions(""), "", "required")}
           ${selectField("Producto llevado", "productId", productOptions(selectedProduct), selectedProduct)}
           ${inputField("Cantidad producto", "productQty", "number", "1", "min='0' required")}
           ${inputField("Monto servicio", "serviceAmount", "number", defaultServiceAmount, "min='0' step='100' required")}
@@ -3574,7 +3971,9 @@ function handleSubmit(event) {
     staff: addStaff,
     benefit: addBenefit,
     vacation: addVacation,
-    payable: addPayable
+    payable: addPayable,
+    rosterPerson: saveRosterPerson,
+    rosterAssignment: addRosterAssignment
   };
 
   handlers[form.dataset.form]?.(data);
@@ -3980,6 +4379,36 @@ function handleRowActions(event) {
     renderView();
     return;
   }
+
+  const rosterEditBtn = event.target.closest("[data-roster-edit]");
+  if (rosterEditBtn) {
+    if (!requireWrite("personal")) return;
+    startEditRoster(rosterEditBtn.dataset.rosterEdit);
+    return;
+  }
+  const rosterToggleBtn = event.target.closest("[data-roster-toggle]");
+  if (rosterToggleBtn) {
+    toggleRosterActive(rosterToggleBtn.dataset.rosterToggle);
+    return;
+  }
+  const rosterDelBtn = event.target.closest("[data-roster-del]");
+  if (rosterDelBtn) {
+    removeRosterPerson(rosterDelBtn.dataset.rosterDel);
+    return;
+  }
+  if (event.target.closest("[data-roster-cancel]")) {
+    event.preventDefault();
+    editingRosterId = "";
+    renderView();
+    return;
+  }
+  const moveDelBtn = event.target.closest("[data-move-del]");
+  if (moveDelBtn) {
+    const [personId, moveId] = moveDelBtn.dataset.moveDel.split(":");
+    removeRosterAssignment(personId, moveId);
+    return;
+  }
+
   const payStatusBtn = event.target.closest("[data-pay-status]");
   if (payStatusBtn) {
     if (!requireWrite("planilla")) return;
@@ -4400,6 +4829,20 @@ elements.reasonModal.addEventListener("click", (event) => {
 
 document.addEventListener("submit", handleSubmit);
 document.addEventListener("click", handleClick);
+
+// Al cambiar la categoria en la ficha de Personal, se marcan por defecto los
+// servicios de esa categoria (el usuario luego afina). Sin esto, una persona
+// nueva quedaria sin servicios marcados hasta hacerlo a mano.
+document.addEventListener("change", (event) => {
+  const categorySelect = event.target.closest('form[data-form="rosterPerson"] select[name="category"]');
+  if (!categorySelect) return;
+  const category = categorySelect.value;
+  document.querySelectorAll("input[data-roster-service]").forEach((box) => {
+    const procedure = (state.procedures || []).find((item) => item.id === box.value);
+    const procedureCat = procedureCategory(procedure);
+    box.checked = !procedureCat || procedureCat === category;
+  });
+});
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     closeDropdown();
