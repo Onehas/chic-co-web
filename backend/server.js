@@ -601,6 +601,18 @@ function userCanAccessBranch(user, branchId) {
   return scope === "all" || scope === branchId;
 }
 
+// Datos de planilla / RRHH (comisiones, beneficios usados, vacaciones). Son
+// datos sensibles del personal: viven en el nivel superior del estado (no son
+// de una sucursal) y solo los ve y los toca quien tenga acceso explicito.
+const payrollCollections = ["commissions", "benefits", "vacations"];
+
+// Acceso a planilla: siempre el super, y cualquier cuenta a la que el super le
+// haya puesto payrollAccess. Un administrador NO lo tiene por su rol: la
+// pantalla de planilla la abre solo quien el super designe, tal como se pidio.
+function hasPayrollAccess(user) {
+  return Boolean(user?.active && (user.role === "super" || user.payrollAccess === true));
+}
+
 // Sucursales concretas que este usuario puede tocar en el estado actual. null
 // significa "todas" (no hay que filtrar nada).
 function allowedBranchSet(state, user) {
@@ -765,6 +777,9 @@ function applyExtraTopLevelKeys(mergedState, nextState) {
   Object.keys(nextState || {}).forEach((key) => {
     if (managedTopLevelKeys.has(key)) return;
     if (branchDataCollections.includes(key)) return;
+    // La planilla se aplica aparte y solo para quien tiene acceso: un admin sin
+    // acceso a RRHH no puede reescribirla (ni vaciarla) con un PUT normal.
+    if (payrollCollections.includes(key)) return;
     if (nextState[key] === undefined) return;
     mergedState[key] = cloneValue(nextState[key]);
   });
@@ -785,8 +800,13 @@ function clampUserRoles(nextUsers, currentState, requester) {
   const currentById = new Map((currentState?.users || []).map((item) => [item.id, item]));
   return nextUsers.map((candidate) => {
     const current = currentById.get(candidate.id);
+    // Solo un super puede otorgar o quitar acceso a planilla. Para cualquier
+    // otro requester, payrollAccess queda como estaba guardado (o false en una
+    // cuenta nueva): nadie que no sea super se da acceso a RRHH ni se lo da a otro.
+    const clampPayroll = (user) =>
+      requesterIsSuper ? user : { ...user, payrollAccess: current ? current.payrollAccess === true : false };
     if (requester && candidate.id === requester.id && current) {
-      return { ...candidate, role: current.role, permissions: current.permissions };
+      return clampPayroll({ ...candidate, role: current.role, permissions: current.permissions });
     }
     // Solo un super puede INTRODUCIR o ELEVAR a super/admin. Pero si el rol
     // enviado es elevado y coincide con el ya guardado, no es una elevacion: no
@@ -794,11 +814,11 @@ function clampUserRoles(nextUsers, currentState, requester) {
     // usuarios, cualquier guardado de un no-super (o de un admin, que tampoco es
     // super) degradaba a recepcion a TODOS los admin/super existentes.
     if (!requesterIsSuper && elevatedRoles.has(candidate.role)) {
-      if (current && current.role === candidate.role) return candidate;
+      if (current && current.role === candidate.role) return clampPayroll(candidate);
       const safeRole = current && !elevatedRoles.has(current.role) ? current.role : "recepcion";
-      return { ...candidate, role: safeRole };
+      return clampPayroll({ ...candidate, role: safeRole });
     }
-    return candidate;
+    return clampPayroll(candidate);
   });
 }
 
@@ -878,6 +898,12 @@ function applyWritePolicy(nextState, currentState, session) {
     // Solo un super puede borrar cuentas; un admin que omita a alguien no lo
     // elimina. Se corre despues de clampUserRoles para conservar rol/permisos.
     mergedState.users = guardUserDeletions(mergedState.users, currentState, user);
+  }
+
+  // Planilla: solo quien tiene acceso a RRHH puede escribir estas colecciones.
+  // Para el resto quedan tal como estaban guardadas (cloneValue de currentState).
+  if (hasPayrollAccess(user)) {
+    applyAllowedCollections(mergedState, safeNextState, new Set(payrollCollections));
   }
 
   if (!canWriteModule(user, "inventario")) {
@@ -2345,6 +2371,9 @@ async function handleApi(req, res, url) {
     // La bitacora de auditoria es solo para administradores (igual que
     // /api/audit). No debe viajar en el estado a una cuenta de recepcion.
     if (!isFullAccessUser(user)) delete safe.auditLog;
+    // La planilla (comisiones, beneficios, vacaciones) es datos sensibles del
+    // personal: no viaja a quien no tenga acceso a RRHH, ni siquiera en crudo.
+    if (!hasPayrollAccess(user)) payrollCollections.forEach((collection) => delete safe[collection]);
     sendJson(req, res, 200, { ok: true, state: safe });
     return;
   }
@@ -2457,12 +2486,14 @@ async function handleApi(req, res, url) {
       // una cuenta atada no puede ver la otra sede ni siquiera en la respuesta
       // 409 que usa para fusionar.
       const conflictUser = sessionUserFromState(result.currentState, session);
+      const conflictState = stripSensitiveState(scopeStateForUser(result.currentState, conflictUser));
+      if (!hasPayrollAccess(conflictUser)) payrollCollections.forEach((collection) => delete conflictState[collection]);
       sendJson(req, res, 409, {
         ok: false,
         code: "STATE_CONFLICT",
         message: "Otro usuario guardo primero. Vuelva a cargar los datos antes de guardar.",
         stateRevision: result.currentRevision,
-        state: stripSensitiveState(scopeStateForUser(result.currentState, conflictUser))
+        state: conflictState
       });
       return;
     }
@@ -2659,6 +2690,8 @@ module.exports = {
   userCanAccessBranch,
   allowedBranchSet,
   scopeStateForUser,
+  hasPayrollAccess,
+  payrollCollections,
   // El esquema de sucursales y colecciones se exporta para que una prueba de
   // paridad verifique que el cliente (app.js: branchDataKeys / branchOptions)
   // no se desincronice del servidor. Una divergencia hace que una coleccion

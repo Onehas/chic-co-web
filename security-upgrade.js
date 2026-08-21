@@ -342,6 +342,14 @@
 
     merged.users = mergeCollection(base?.users, mine?.users, merged.users);
 
+    // Planilla / RRHH: colecciones de nivel superior. Se fusionan por id para no
+    // perder una comision/beneficio/vacacion que se guardo aqui mientras otra
+    // persona guardaba algo mas. Para quien no tiene acceso a RRHH todas llegan
+    // vacias y el servidor de todos modos ignora sus escrituras a planilla.
+    ["commissions", "benefits", "vacations"].forEach((key) => {
+      merged[key] = mergeCollection(base?.[key], mine?.[key], merged[key]);
+    });
+
     if (branchOptions.some((branch) => branch.id === mine?.currentBranchId)) {
       merged.currentBranchId = mine.currentBranchId;
     }

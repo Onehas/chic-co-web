@@ -104,6 +104,9 @@ const branchOptions = [
 // inicial, antes de que corra el resto del archivo.
 const branchScopeValues = ["all", ...branchOptions.map((branch) => branch.id)];
 
+// Colecciones de planilla / RRHH en el nivel superior del estado.
+const payrollKeys = ["commissions", "benefits", "vacations"];
+
 const procedureSpecialists = [
   { name: "Andrea Morales", focus: "Faciales" },
   { name: "Paola Jimenez", focus: "Color" },
@@ -164,6 +167,11 @@ const defaultState = {
   ...emptyBranchData(),
   currentBranchId: "rohrmoser",
   currentUserId: "USR-000",
+  // Planilla / RRHH (datos de todo el negocio, no de una sucursal). Solo los ve
+  // y edita quien el super usuario designe con payrollAccess.
+  commissions: [],
+  benefits: [],
+  vacations: [],
   users: [
     superUserAccount,
     {
@@ -223,6 +231,11 @@ const moduleConfig = {
   pagos: {
     title: "Facturas pagadas",
     description: "Control de gerencia sobre las facturas cobradas por completo, con totales y export.",
+    actions: []
+  },
+  planilla: {
+    title: "Planilla y RRHH",
+    description: "Comisiones, beneficios y vacaciones del personal. Acceso restringido por el super usuario.",
     actions: []
   },
   clientes: {
@@ -403,6 +416,12 @@ function normalizeStateSnapshot(snapshot) {
     if (!Array.isArray(merged[key])) merged[key] = [];
   });
 
+  // Colecciones de planilla: siempre arrays. Para quien no tiene acceso a RRHH
+  // el servidor no las envia, asi que quedan vacias (no las vera de todos modos).
+  payrollKeys.forEach((key) => {
+    if (!Array.isArray(merged[key])) merged[key] = [];
+  });
+
   const fallbackBranches = defaultBranches();
   const savedBranches = parsed.branches || {};
   const legacyRohrmoserData = pickBranchData(merged);
@@ -463,10 +482,14 @@ function normalizeUser(user) {
       : branchScopeValues.includes(savedScope) && savedScope
         ? savedScope
         : "all";
+  // Acceso a planilla/RRHH. El super siempre lo tiene; el resto solo si el
+  // super se lo asigno. Se guarda como booleano explicito.
+  const payrollAccess = role === "super" ? true : user.payrollAccess === true;
   return {
     ...user,
     role,
     branchScope,
+    payrollAccess,
     active: user.active !== false,
     passwordHash: user.passwordHash || fallbackPasswordHash,
     permissions: permissionModules.reduce((permissions, moduleName) => {
@@ -848,14 +871,25 @@ function branchScopeOptions(selected = "all") {
 // permisos por modulo.
 const adminOnlyModules = new Set(["dashboard", "integraciones", "pagos"]);
 
+// Acceso a planilla/RRHH: el super siempre, y cualquier cuenta a la que el super
+// le asigno payrollAccess. NO basta con ser admin: es un acceso designado.
+function hasPayrollAccess(user = currentUser()) {
+  return Boolean(user?.active && (user.role === "super" || user.payrollAccess === true));
+}
+
+// Modulo de planilla: acceso designado, no por rol ni por la matriz de permisos.
+const payrollModules = new Set(["planilla"]);
+
 function canView(moduleName) {
   const user = currentUser();
+  if (payrollModules.has(moduleName)) return hasPayrollAccess(user);
   if (adminOnlyModules.has(moduleName)) return isAdminRole(user);
   return Boolean(user?.active && user.permissions?.[moduleName]?.read);
 }
 
 function canWrite(moduleName) {
   const user = currentUser();
+  if (payrollModules.has(moduleName)) return hasPayrollAccess(user);
   return Boolean(user?.active && user.permissions?.[moduleName]?.write);
 }
 
@@ -1521,6 +1555,105 @@ function dashboardBreakdownTable(title, groups, extraLabel) {
     </section>`;
 }
 
+/* =====================================================================
+   Planilla / RRHH
+   ---------------------------------------------------------------------
+   Comisiones, beneficios usados y vacaciones del personal. Datos de todo
+   el negocio (no de una sucursal). Solo los ve y edita quien el super
+   usuario designe con payrollAccess; el servidor ni siquiera los envia a
+   los demas.
+   ===================================================================== */
+
+function currentMonthISO() {
+  return todayISO().slice(0, 7);
+}
+
+// Nombres del personal para asignar comisiones/beneficios/vacaciones: cuentas
+// activas del sistema mas la lista de especialistas, sin repetir.
+function staffNames() {
+  const fromUsers = (state.users || []).filter((user) => user.active).map((user) => user.name);
+  const fromSpecialists = procedureSpecialists.map((specialist) => specialist.name);
+  return [...new Set([...fromUsers, ...fromSpecialists].map((name) => String(name).trim()).filter(Boolean))].sort();
+}
+
+function staffOptions(selected = "") {
+  return staffNames().map((name) => ({ value: name, label: name, selected: name === selected }));
+}
+
+function payrollCommission(record) {
+  return Math.round((Number(record.sales) || 0) * (Number(record.rate) || 0) / 100);
+}
+
+function payrollTotal(record) {
+  return (Number(record.baseSalary) || 0) + payrollCommission(record);
+}
+
+function vacationDays(fromISO, toISO) {
+  const from = Date.parse(`${fromISO}T00:00:00Z`);
+  const to = Date.parse(`${toISO}T00:00:00Z`);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) return 0;
+  return Math.round((to - from) / (24 * 60 * 60 * 1000)) + 1;
+}
+
+function addCommission(data) {
+  const worker = (data.worker || "").trim();
+  if (!worker) return showToast("Elige a la persona");
+  state.commissions.unshift({
+    id: nextId("COM", state.commissions),
+    worker,
+    period: (data.period || currentMonthISO()).trim(),
+    baseSalary: Number(data.baseSalary || 0),
+    sales: Number(data.sales || 0),
+    rate: Number(data.rate || 0),
+    status: data.status || "Pendiente",
+    notes: (data.notes || "").trim()
+  });
+  persistAndRender("Comision registrada");
+}
+
+function addBenefit(data) {
+  const worker = (data.worker || "").trim();
+  if (!worker) return showToast("Elige a la persona");
+  state.benefits.unshift({
+    id: nextId("BEN", state.benefits),
+    worker,
+    type: (data.type || "Beneficio").trim(),
+    amount: Number(data.amount || 0),
+    date: (data.date || todayISO()).trim(),
+    notes: (data.notes || "").trim()
+  });
+  persistAndRender("Beneficio registrado");
+}
+
+function addVacation(data) {
+  const worker = (data.worker || "").trim();
+  if (!worker) return showToast("Elige a la persona");
+  const from = (data.from || todayISO()).trim();
+  const to = (data.to || from).trim();
+  if (vacationDays(from, to) <= 0) return showToast("Revisa las fechas de las vacaciones");
+  state.vacations.unshift({
+    id: nextId("VAC", state.vacations),
+    worker,
+    from,
+    to,
+    status: data.status || "Solicitada",
+    notes: (data.notes || "").trim()
+  });
+  persistAndRender("Vacaciones registradas");
+}
+
+const payrollCollectionByKind = { commission: "commissions", benefit: "benefits", vacation: "vacations" };
+
+function removePayrollRecord(kind, id) {
+  const collection = payrollCollectionByKind[kind];
+  if (!collection || !Array.isArray(state[collection])) return;
+  const record = state[collection].find((item) => item.id === id);
+  if (!record) return;
+  if (!confirm("¿Eliminar este registro de planilla?")) return;
+  state[collection] = state[collection].filter((item) => item.id !== id);
+  persistAndRender("Registro eliminado");
+}
+
 const viewRenderers = {
   dashboard() {
     const period = dashboardPeriod;
@@ -1667,6 +1800,175 @@ const viewRenderers = {
             </table>
           </div>
         </section>
+      </section>
+    `;
+  },
+
+  planilla() {
+    const month = currentMonthISO();
+    const commissions = state.commissions || [];
+    const benefits = state.benefits || [];
+    const vacations = state.vacations || [];
+
+    const monthCommissions = commissions.filter((item) => String(item.period || "").slice(0, 7) === month);
+    const totalComisiones = monthCommissions.reduce((sum, item) => sum + payrollTotal(item), 0);
+    const monthBenefits = benefits.filter((item) => String(item.date || "").slice(0, 7) === month);
+    const totalBeneficios = monthBenefits.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+    const vacacionesPendientes = vacations.filter((item) => item.status !== "Tomada").length;
+
+    const kpis = [
+      ["Planilla del mes", money(totalComisiones)],
+      ["Beneficios del mes", money(totalBeneficios)],
+      ["Vacaciones activas", String(vacacionesPendientes)],
+      ["Personal en planilla", String(new Set(commissions.map((item) => item.worker)).size)]
+    ]
+      .map(
+        ([label, value]) => `
+          <div class="dash-kpi">
+            <span class="dash-kpi-value">${escapeHtml(value)}</span>
+            <span class="dash-kpi-label">${escapeHtml(label)}</span>
+          </div>`
+      )
+      .join("");
+
+    const delBtn = (kind, id) => `<button class="row-action is-warning" type="button" data-payroll-del="${kind}:${escapeHtml(id)}">Eliminar</button>`;
+    const statusOptions = (list, selected) => list.map((value) => ({ value, label: value, selected: value === selected }));
+
+    /* --- Comisiones --- */
+    const commissionRows = commissions.length
+      ? commissions
+          .map(
+            (item) => `
+        <tr>
+          <td><strong>${escapeHtml(item.worker)}</strong></td>
+          <td>${escapeHtml(item.period)}</td>
+          <td class="dash-num">${money(item.baseSalary)}</td>
+          <td class="dash-num">${money(item.sales)}</td>
+          <td class="dash-num">${escapeHtml(item.rate)}%</td>
+          <td class="dash-num">${money(payrollCommission(item))}</td>
+          <td class="dash-num"><strong>${money(payrollTotal(item))}</strong></td>
+          <td>${statusBadge(item.status)}</td>
+          <td>${delBtn("commission", item.id)}</td>
+        </tr>`
+          )
+          .join("")
+      : `<tr><td colspan="9"><p class="dash-empty">Aun no hay comisiones registradas.</p></td></tr>`;
+
+    const commissionForm = `
+      <form class="data-form payroll-form" data-form="commission" autocomplete="off">
+        <div class="form-grid">
+          ${selectField("Persona", "worker", staffOptions(), "", "required")}
+          ${inputField("Periodo", "period", "month", month, "required")}
+          ${inputField("Salario base", "baseSalary", "number", "0", "min='0' step='100'")}
+          ${inputField("Ventas del periodo", "sales", "number", "0", "min='0' step='100'")}
+          ${inputField("Comision %", "rate", "number", "0", "min='0' step='0.5'")}
+          ${selectField("Estado", "status", statusOptions(["Pendiente", "Pagada"], "Pendiente"), "Pendiente")}
+        </div>
+        <button class="primary-action" type="submit">Registrar comision</button>
+      </form>`;
+
+    /* --- Beneficios --- */
+    const benefitRows = benefits.length
+      ? benefits
+          .map(
+            (item) => `
+        <tr>
+          <td><strong>${escapeHtml(item.worker)}</strong></td>
+          <td>${escapeHtml(item.type)}</td>
+          <td class="dash-num">${money(item.amount)}</td>
+          <td>${escapeHtml(item.date)}</td>
+          <td>${escapeHtml(item.notes || "")}</td>
+          <td>${delBtn("benefit", item.id)}</td>
+        </tr>`
+          )
+          .join("")
+      : `<tr><td colspan="6"><p class="dash-empty">Aun no hay beneficios registrados.</p></td></tr>`;
+
+    const benefitForm = `
+      <form class="data-form payroll-form" data-form="benefit" autocomplete="off">
+        <div class="form-grid">
+          ${selectField("Persona", "worker", staffOptions(), "", "required")}
+          ${selectField("Tipo", "type", statusOptions(["Aguinaldo", "Bono", "Seguro", "Capacitacion", "Adelanto", "Otro"], "Bono"), "Bono")}
+          ${inputField("Monto", "amount", "number", "0", "min='0' step='100'")}
+          ${inputField("Fecha", "date", "date", todayISO(), "required")}
+          ${inputField("Nota", "notes", "text", "")}
+        </div>
+        <button class="primary-action" type="submit">Registrar beneficio</button>
+      </form>`;
+
+    /* --- Vacaciones --- */
+    const vacationRows = vacations.length
+      ? vacations
+          .map(
+            (item) => `
+        <tr>
+          <td><strong>${escapeHtml(item.worker)}</strong></td>
+          <td>${escapeHtml(item.from)}</td>
+          <td>${escapeHtml(item.to)}</td>
+          <td class="dash-num">${vacationDays(item.from, item.to)}</td>
+          <td>${statusBadge(item.status)}</td>
+          <td>${escapeHtml(item.notes || "")}</td>
+          <td>${delBtn("vacation", item.id)}</td>
+        </tr>`
+          )
+          .join("")
+      : `<tr><td colspan="7"><p class="dash-empty">Aun no hay vacaciones registradas.</p></td></tr>`;
+
+    const vacationForm = `
+      <form class="data-form payroll-form" data-form="vacation" autocomplete="off">
+        <div class="form-grid">
+          ${selectField("Persona", "worker", staffOptions(), "", "required")}
+          ${inputField("Desde", "from", "date", todayISO(), "required")}
+          ${inputField("Hasta", "to", "date", todayISO(), "required")}
+          ${selectField("Estado", "status", statusOptions(["Solicitada", "Aprobada", "Tomada"], "Solicitada"), "Solicitada")}
+          ${inputField("Nota", "notes", "text", "")}
+        </div>
+        <button class="primary-action" type="submit">Registrar vacaciones</button>
+      </form>`;
+
+    const panel = (title, subtitle, form, headers, rows) => `
+      <section class="dash-panel dash-panel-wide payroll-panel">
+        <h3>${escapeHtml(title)}</h3>
+        <p class="payroll-sub">${escapeHtml(subtitle)}</p>
+        ${canWrite("planilla") ? form : ""}
+        <div class="table-wrap">
+          <table class="dash-table">
+            <thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </section>`;
+
+    return `
+      <section class="dash">
+        <div class="dash-head">
+          <div>
+            <h2>Planilla y RRHH</h2>
+            <p>Comisiones, beneficios y vacaciones del personal. Acceso restringido por el super usuario.</p>
+          </div>
+        </div>
+        <div class="dash-kpis">${kpis}</div>
+        ${panel(
+          "Comisiones",
+          "Salario base + comision sobre ventas por periodo.",
+          commissionForm,
+          ["Persona", "Periodo", "Base", "Ventas", "%", "Comision", "Total", "Estado", ""],
+          commissionRows
+        )}
+        ${panel(
+          "Beneficios utilizados",
+          "Aguinaldo, bonos, seguros, capacitaciones y adelantos.",
+          benefitForm,
+          ["Persona", "Tipo", "Monto", "Fecha", "Nota", ""],
+          benefitRows
+        )}
+        ${panel(
+          "Vacaciones",
+          "Control de dias solicitados, aprobados y tomados.",
+          vacationForm,
+          ["Persona", "Desde", "Hasta", "Dias", "Estado", "Nota", ""],
+          vacationRows
+        )}
       </section>
     `;
   },
@@ -2236,7 +2538,7 @@ const viewRenderers = {
                 <span>${escapeHtml(user.id)} | ${escapeHtml(user.email)}</span>
               </div>
             </td>
-            <td>${escapeHtml(roleLabel(user.role))}<br />${escapeHtml(user.function)}</td>
+            <td>${escapeHtml(roleLabel(user.role))}<br />${escapeHtml(user.function)}${user.payrollAccess ? `<br /><span class="access-chip">Planilla</span>` : ""}</td>
             <td>${escapeHtml(branchScopeLabel(user.branchScope))}</td>
             <td>${user.active ? statusBadge("Activo") : statusBadge("Pausado")}</td>
             <td><div class="permission-list">${permissionBadges}</div></td>
@@ -2270,6 +2572,19 @@ const viewRenderers = {
           ${selectField("Funcion", "role", roleOptions, "recepcion", "required")}
           ${inputField("Detalle de funcion", "function", "text", "Recepcion y agenda", "required")}
           ${selectField("Sucursal asignada", "branchScope", branchScopeOptions(), "all")}
+          ${
+            currentUser()?.role === "super"
+              ? selectField(
+                  "Acceso a planilla",
+                  "payrollAccess",
+                  [
+                    { value: "false", label: "No", selected: true },
+                    { value: "true", label: "Si" }
+                  ],
+                  "false"
+                )
+              : ""
+          }
         </div>
         <div class="permission-preview">
           <strong>Funciones base</strong>
@@ -2855,7 +3170,10 @@ function handleSubmit(event) {
     plan: addPlan,
     appointment: addAppointment,
     invoice: addInvoice,
-    user: addUser
+    user: addUser,
+    commission: addCommission,
+    benefit: addBenefit,
+    vacation: addVacation
   };
 
   handlers[form.dataset.form]?.(data);
@@ -3021,6 +3339,9 @@ function addUser(data) {
       : branchScopeValues.includes(chosenScope)
         ? chosenScope
         : "all";
+  // Acceso a planilla solo lo puede otorgar un super (el servidor tambien lo
+  // exige). Un admin creando una cuenta no puede darlo.
+  const payrollAccess = currentUser()?.role === "super" ? data.payrollAccess === "true" : false;
   state.users.push({
     id: nextId("USR", state.users),
     name: data.name.trim(),
@@ -3028,6 +3349,7 @@ function addUser(data) {
     role,
     function: data.function.trim(),
     branchScope,
+    payrollAccess,
     active: true,
     // Sin contrasena: la cuenta nueva no puede entrar hasta que su dueña la
     // cree con "¿Olvidaste tu contraseña?" en el login. Asi ninguna cuenta
@@ -3203,6 +3525,14 @@ function handleRowActions(event) {
 
   if (event.target.closest("[data-pagos-export]")) {
     exportPaidInvoices();
+    return;
+  }
+
+  const payrollDelButton = event.target.closest("[data-payroll-del]");
+  if (payrollDelButton) {
+    if (!requireWrite("planilla")) return;
+    const [kind, id] = payrollDelButton.dataset.payrollDel.split(":");
+    removePayrollRecord(kind, id);
     return;
   }
 
