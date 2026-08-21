@@ -507,7 +507,7 @@
           ${inputField("Fecha", "date", "date", selectedDay, "required")}
           ${inputField("Hora", "time", "time", firstAvailableTime, "required")}
           ${selectField("Especialista", "specialist", specialistOptions(selectedSpecialist), selectedSpecialist, "required")}
-          ${inputField("Duracion mins", "duration", "number", defaultDuration, "min='15' step='15' required")}
+          ${inputField("Duracion mins", "duration", "number", defaultDuration, "min='5' required")}
           ${selectField("Estado", "status", statusOptions("Pendiente"), "Pendiente", "required")}
           ${textareaField("Notas de la cita", "notes")}
         </div>
