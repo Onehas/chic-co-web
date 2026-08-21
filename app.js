@@ -56,6 +56,13 @@ const rolePresets = {
   inventario: {
     label: "Inventario",
     permissions: buildPermissions(["inventario", "procedimientos"], ["inventario"])
+  },
+  contadora: {
+    label: "Contadora",
+    // Solo lectura para cuadrar numeros y exportar: inventario, facturacion y
+    // cuentas por pagar. Ademas ve el dashboard (se habilita aparte, abajo).
+    // NO puede sacar stock salvo que el super le asigne stockOutAccess.
+    permissions: buildPermissions(["inventario", "facturacion", "proveedores"], [])
   }
 };
 
@@ -526,11 +533,16 @@ function normalizeUser(user) {
   // Acceso a planilla/RRHH. El super siempre lo tiene; el resto solo si el
   // super se lo asigno. Se guarda como booleano explicito.
   const payrollAccess = role === "super" ? true : user.payrollAccess === true;
+  // Permiso de "salida de inventario": sacar stock. Solo el super lo asigna.
+  // Super y admin ya pueden por su acceso a inventario; para el resto es este
+  // flag explicito (p. ej. una contadora que solo lee inventario).
+  const stockOutAccess = user.stockOutAccess === true;
   return {
     ...user,
     role,
     branchScope,
     payrollAccess,
+    stockOutAccess,
     active: user.active !== false,
     passwordHash: user.passwordHash || fallbackPasswordHash,
     permissions: permissionModules.reduce((permissions, moduleName) => {
@@ -709,7 +721,12 @@ function showApp(userId) {
   storeStateLocally();
   document.body.classList.remove("is-login");
   document.body.classList.add("is-authenticated");
-  currentModule = canView("clientes") ? "clientes" : firstAllowedModule();
+  // La contadora entra directo al dashboard (su pantalla de numeros).
+  currentModule = canView("dashboard") && currentUser()?.role === "contadora"
+    ? "dashboard"
+    : canView("clientes")
+      ? "clientes"
+      : firstAllowedModule();
   connectRealtimeSync();
   setModule(currentModule, { silent: true });
 }
@@ -925,6 +942,9 @@ const payrollModules = new Set(["planilla"]);
 function canView(moduleName) {
   const user = currentUser();
   if (payrollModules.has(moduleName)) return hasPayrollAccess(user);
+  // El dashboard (reportes) lo ven direccion y la contadora. Los demas modulos
+  // "solo direccion" (integraciones) siguen siendo de admin.
+  if (moduleName === "dashboard") return isAdminRole(user) || user?.role === "contadora";
   if (adminOnlyModules.has(moduleName)) return isAdminRole(user);
   return Boolean(user?.active && user.permissions?.[moduleName]?.read);
 }
@@ -933,6 +953,14 @@ function canWrite(moduleName) {
   const user = currentUser();
   if (payrollModules.has(moduleName)) return hasPayrollAccess(user);
   return Boolean(user?.active && user.permissions?.[moduleName]?.write);
+}
+
+// Sacar stock ("Usar -1" / salidas de inventario). Lo puede hacer quien
+// administra inventario (encargados actuales) y quien el super habilite con
+// stockOutAccess (p. ej. la contadora). Sin esto, un no-encargado no saca stock.
+function canTakeStockOut() {
+  const user = currentUser();
+  return Boolean(user?.active && (canWrite("inventario") || user.stockOutAccess === true));
 }
 
 function firstAllowedModule() {
@@ -2885,9 +2913,10 @@ const viewRenderers = {
             <td>${escapeHtml(product.supplier || "-")}</td>
             <td>
               <div class="inline-actions">
-                <button class="row-action" type="button" data-stock-add="${product.id}">Entrada +1</button>
-                <button class="row-action is-muted" type="button" data-stock-use="${product.id}">Usar -1</button>
-                <button class="row-action is-muted" type="button" data-product-place="${product.id}">Ubicar</button>
+                ${canWrite("inventario") ? `<button class="row-action" type="button" data-stock-add="${product.id}">Entrada +1</button>` : ""}
+                ${canTakeStockOut() ? `<button class="row-action is-muted" type="button" data-stock-use="${product.id}">Usar -1</button>` : ""}
+                ${canWrite("inventario") ? `<button class="row-action is-muted" type="button" data-product-place="${product.id}">Ubicar</button>` : ""}
+                ${!canWrite("inventario") && !canTakeStockOut() ? `<span class="muted-cell">Solo lectura</span>` : ""}
               </div>
             </td>
           </tr>
@@ -3358,7 +3387,7 @@ const viewRenderers = {
                 <span>${escapeHtml(user.id)} | ${escapeHtml(user.email)}</span>
               </div>
             </td>
-            <td>${escapeHtml(roleLabel(user.role))}<br />${escapeHtml(user.function)}${user.payrollAccess ? `<br /><span class="access-chip">Planilla</span>` : ""}</td>
+            <td>${escapeHtml(roleLabel(user.role))}<br />${escapeHtml(user.function)}${user.payrollAccess ? `<br /><span class="access-chip">Planilla</span>` : ""}${user.stockOutAccess ? `<br /><span class="access-chip">Salida inventario</span>` : ""}</td>
             <td>${escapeHtml(branchScopeLabel(user.branchScope))}</td>
             <td>${user.active ? statusBadge("Activo") : statusBadge("Pausado")}</td>
             <td><div class="permission-list">${permissionBadges}</div></td>
@@ -3405,6 +3434,19 @@ const viewRenderers = {
                   [
                     { value: "false", label: "No", selected: true },
                     { value: "true", label: "Si" }
+                  ],
+                  "false"
+                )
+              : ""
+          }
+          ${
+            currentUser()?.role === "super"
+              ? selectField(
+                  "Salida de inventario",
+                  "stockOutAccess",
+                  [
+                    { value: "false", label: "No", selected: true },
+                    { value: "true", label: "Si (puede sacar stock)" }
                   ],
                   "false"
                 )
@@ -4192,9 +4234,11 @@ function addUser(data) {
       : branchScopeValues.includes(chosenScope)
         ? chosenScope
         : "all";
-  // Acceso a planilla solo lo puede otorgar un super (el servidor tambien lo
-  // exige). Un admin creando una cuenta no puede darlo.
-  const payrollAccess = currentUser()?.role === "super" ? data.payrollAccess === "true" : false;
+  // Acceso a planilla y salida de inventario solo los otorga un super (el
+  // servidor tambien lo exige). Un admin creando una cuenta no puede darlos.
+  const isSuper = currentUser()?.role === "super";
+  const payrollAccess = isSuper ? data.payrollAccess === "true" : false;
+  const stockOutAccess = isSuper ? data.stockOutAccess === "true" : false;
   state.users.push({
     id: nextId("USR", state.users),
     name: data.name.trim(),
@@ -4203,6 +4247,7 @@ function addUser(data) {
     function: data.function.trim(),
     branchScope,
     payrollAccess,
+    stockOutAccess,
     active: true,
     // Sin contrasena: la cuenta nueva no puede entrar hasta que su dueña la
     // cree con "¿Olvidaste tu contraseña?" en el login. Asi ninguna cuenta
@@ -4599,11 +4644,16 @@ function handleRowActions(event) {
   }
 
   if (stockAdd) {
+    if (!requireWrite("inventario")) return;
     updateStock(stockAdd.dataset.stockAdd, 1, "Entrada registrada");
     return;
   }
 
   if (stockUse) {
+    if (!canTakeStockOut()) {
+      showToast("No tienes permiso para sacar productos del inventario");
+      return;
+    }
     openStockReasonModal(stockUse.dataset.stockUse);
     return;
   }

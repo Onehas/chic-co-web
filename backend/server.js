@@ -667,6 +667,15 @@ function writableCollectionsForUser(user) {
   // `usuarios.write`, no puede escribir la coleccion `users`: asi no puede
   // fabricar cuentas con permisos ni tocar los roles de nadie.
   collections.delete("users");
+  // Salida de inventario: quien tenga stockOutAccess (lo asigna el super, p. ej.
+  // una contadora que solo lee inventario) puede tocar productos y movimientos
+  // para SACAR stock. No es escritura de inventario: mas abajo, como no tiene el
+  // modulo `inventario`, restrictProductChanges limita esos cambios a BAJAS de
+  // stock (nunca subir existencias ni reeditar el catalogo).
+  if (user && user.stockOutAccess === true) {
+    collections.add("products");
+    collections.add("stockMovements");
+  }
   return collections;
 }
 
@@ -836,8 +845,17 @@ function clampUserRoles(nextUsers, currentState, requester) {
     // Solo un super puede otorgar o quitar acceso a planilla. Para cualquier
     // otro requester, payrollAccess queda como estaba guardado (o false en una
     // cuenta nueva): nadie que no sea super se da acceso a RRHH ni se lo da a otro.
+    // Solo un super otorga/quita acceso a planilla y salida de inventario. Para
+    // cualquier otro requester, ambos quedan como estaban guardados (o false en
+    // una cuenta nueva): nadie que no sea super se los da a si mismo ni a otro.
     const clampPayroll = (user) =>
-      requesterIsSuper ? user : { ...user, payrollAccess: current ? current.payrollAccess === true : false };
+      requesterIsSuper
+        ? user
+        : {
+            ...user,
+            payrollAccess: current ? current.payrollAccess === true : false,
+            stockOutAccess: current ? current.stockOutAccess === true : false
+          };
     // Un no-super no puede PAUSAR (ni reactivar) una cuenta elevada (super o
     // admin) ni la cuenta raiz: si pudiera, un admin dejaria fuera al super
     // enviando su cuenta con active:false y se quedaria como unica cuenta con
