@@ -12,6 +12,6 @@ backend/data/collection-*.json
 *.key
 *.crt
 *.cer
-hacienda-secrets/
 Thumbs.db
 .DS_Store
+.claude/
