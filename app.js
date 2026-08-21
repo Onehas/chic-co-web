@@ -210,6 +210,11 @@ const moduleConfig = {
     description: "Saldos, facturas y ventas en vivo por sucursal, colaborador, servicio y producto.",
     actions: []
   },
+  integraciones: {
+    title: "Integraciones",
+    description: "Conecta las aplicaciones que usa el negocio: facturacion, marketing y correo.",
+    actions: []
+  },
   clientes: {
     title: "Clientes",
     description: "Registra informacion de contacto, historial, notas y acciones rapidas para planes o citas.",
@@ -767,11 +772,13 @@ function isAdminRole(user = currentUser()) {
   return Boolean(user?.active && (user.role === "super" || user.role === "admin"));
 }
 
+// Modulos de direccion, solo para administradores; no pasan por la matriz de
+// permisos por modulo.
+const adminOnlyModules = new Set(["dashboard", "integraciones"]);
+
 function canView(moduleName) {
   const user = currentUser();
-  // El dashboard de direccion es solo para administradores; no pasa por la
-  // matriz de permisos por modulo.
-  if (moduleName === "dashboard") return isAdminRole(user);
+  if (adminOnlyModules.has(moduleName)) return isAdminRole(user);
   return Boolean(user?.active && user.permissions?.[moduleName]?.read);
 }
 
@@ -1009,8 +1016,9 @@ function renderSummary() {
   elements.moduleMetrics.innerHTML = moduleMetrics(currentModule)
     .map(([value, label]) => `<div class="metric"><strong>${escapeHtml(value)}</strong><span>${escapeHtml(label)}</span></div>`)
     .join("");
-  if (currentModule === "dashboard") {
-    // El dashboard es de solo lectura por naturaleza; no tiene sentido el aviso.
+  if (adminOnlyModules.has(currentModule)) {
+    // El dashboard y las integraciones son de solo lectura por naturaleza; no
+    // tiene sentido el aviso de "solo lectura".
     elements.moduleActions.innerHTML = "";
     return;
   }

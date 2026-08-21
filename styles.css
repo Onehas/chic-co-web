@@ -750,7 +750,7 @@ body.is-authenticated .login-screen {
 
 
 /* La cabecera de la vista solo aparece cuando alguien escribe en ella
-   (el modulo Hacienda lo hace). Para los modulos normales queda vacía y se
+   (algun modulo podria escribir ahi). Para los modulos normales queda vacía y se
    colapsa, en vez de repetir el título que ya está arriba. */
 .operations-head > div > :empty {
   display: none;
@@ -1815,7 +1815,7 @@ th.num {
 }
 
 /* ---------------------------------------------------------------------
-   Módulos inyectados: resumen de sucursal, herramientas y Hacienda
+   Módulos inyectados: resumen de sucursal y herramientas
    ------------------------------------------------------------------ */
 
 .branch-report,
