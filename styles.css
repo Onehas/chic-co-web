@@ -161,21 +161,55 @@ body.is-authenticated .login-screen {
    ------------------------------------------------------------------ */
 
 .login-screen {
+  position: relative;
   display: grid;
   place-items: center;
   min-height: 100svh;
   padding: 24px;
+  overflow: hidden;
+}
+
+/* Fondo tipo aurora, sutil, para que el acceso se sienta tan cuidado como la
+   pagina publica. Se apaga con prefers-reduced-motion mas abajo. */
+.login-screen::before {
+  content: "";
+  position: absolute;
+  inset: -20% -10% auto -10%;
+  height: 620px;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(58% 58% at 22% 12%, var(--gold-soft), transparent 70%),
+    radial-gradient(52% 52% at 82% 4%, var(--accent-soft), transparent 72%);
+  filter: blur(14px);
+  opacity: 0.9;
 }
 
 .login-panel {
+  position: relative;
+  z-index: 1;
   display: grid;
   gap: 18px;
-  width: min(calc(100vw - 32px), 380px);
-  padding: 28px;
+  width: min(calc(100vw - 32px), 384px);
+  padding: 32px 30px;
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 20px;
   box-shadow: var(--shadow-3);
+  animation: login-rise 520ms var(--ease-out) both;
+}
+
+@keyframes login-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-panel {
+    animation: none;
+  }
 }
 
 .login-brand {
