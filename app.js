@@ -817,7 +817,9 @@ function nextId(prefix, list) {
 }
 
 function money(value) {
-  return `CRC ${Number(value || 0).toLocaleString("es-CR")}`;
+  // Redondeado a colones enteros: los calculos de planilla (CCSS, comisiones)
+  // producen decimales y en pantalla se veian montos como "431 779,866".
+  return `CRC ${Math.round(Number(value) || 0).toLocaleString("es-CR")}`;
 }
 
 function escapeHtml(value = "") {
@@ -2772,12 +2774,6 @@ const viewRenderers = {
 
     return `
       <section class="dash">
-        <div class="dash-head">
-          <div>
-            <h2>Planilla y RRHH</h2>
-            <p>Planilla quincenal calculada, empleados, beneficios y vacaciones. Acceso restringido por el super usuario.</p>
-          </div>
-        </div>
         <div class="dash-kpis">${kpis}</div>
         ${payrollSection}
         ${staffPanel}
@@ -3381,7 +3377,11 @@ const viewRenderers = {
                 <span>${escapeHtml(user.id)} | ${escapeHtml(user.email)}</span>
               </div>
             </td>
-            <td>${escapeHtml(roleLabel(user.role))}<br />${escapeHtml(user.function)}${user.payrollAccess ? `<br /><span class="access-chip">Planilla</span>` : ""}${user.stockOutAccess ? `<br /><span class="access-chip">Salida inventario</span>` : ""}</td>
+            <td>${escapeHtml(roleLabel(user.role))}${
+              user.function && user.function.trim().toLowerCase() !== roleLabel(user.role).trim().toLowerCase()
+                ? `<br /><span class="dash-muted">${escapeHtml(user.function)}</span>`
+                : ""
+            }${user.payrollAccess ? `<br /><span class="access-chip">Planilla</span>` : ""}${user.stockOutAccess ? `<br /><span class="access-chip">Salida inventario</span>` : ""}</td>
             <td>${escapeHtml(branchScopeLabel(user.branchScope))}</td>
             <td>${user.active ? statusBadge("Activo") : statusBadge("Pausado")}</td>
             <td><div class="permission-list">${permissionBadges}</div></td>
@@ -3459,7 +3459,7 @@ const viewRenderers = {
       moduleMetrics("usuarios"),
       "Nuevo usuario",
       form,
-      "Usuarios y permisos",
+      "Cuentas del sistema",
       renderTable(["Usuario", "Funcion", "Sucursal", "Estado", "Permisos", "Acciones"], rows)
     );
   }
