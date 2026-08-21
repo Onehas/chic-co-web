@@ -220,6 +220,11 @@ const moduleConfig = {
     description: "Conecta las aplicaciones que usa el negocio: facturacion, marketing y correo.",
     actions: []
   },
+  pagos: {
+    title: "Facturas pagadas",
+    description: "Control de gerencia sobre las facturas cobradas por completo, con totales y export.",
+    actions: []
+  },
   clientes: {
     title: "Clientes",
     description: "Registra informacion de contacto, historial, notas y acciones rapidas para planes o citas.",
@@ -841,7 +846,7 @@ function branchScopeOptions(selected = "all") {
 
 // Modulos de direccion, solo para administradores; no pasan por la matriz de
 // permisos por modulo.
-const adminOnlyModules = new Set(["dashboard", "integraciones"]);
+const adminOnlyModules = new Set(["dashboard", "integraciones", "pagos"]);
 
 function canView(moduleName) {
   const user = currentUser();
@@ -1301,12 +1306,58 @@ function statusBadge(status) {
    ===================================================================== */
 
 let dashboardPeriod = "mes";
+// Control de facturas pagadas (gerencia): periodo y sucursal filtrada.
+let pagosPeriod = "mes";
+let pagosBranch = "all";
 
 const dashboardPeriods = [
   { id: "hoy", label: "Hoy" },
   { id: "mes", label: "Este mes" },
   { id: "todo", label: "Todo" }
 ];
+
+// Una factura esta "pagada" cuando lo cobrado cubre el total (con IVA). Un abono
+// parcial no cuenta como pagada.
+function isInvoicePaid(invoice) {
+  return Number(invoice.paid || 0) >= invoiceTotal(invoice) && invoiceTotal(invoice) > 0;
+}
+
+// Filas de facturas PAGADAS del periodo y sucursal elegidos, mas recientes
+// primero. Solo la gerencia (admin/super) llega aqui, asi que ve todas las sedes.
+function paidInvoiceRows(period = pagosPeriod, branchFilter = pagosBranch) {
+  return allInvoicesAcrossBranches()
+    .filter((row) => isInvoicePaid(row.invoice))
+    .filter((row) => invoiceInPeriod(row.invoice, period))
+    .filter((row) => branchFilter === "all" || row.branchId === branchFilter)
+    .sort((a, b) => String(b.invoice.date || "").localeCompare(String(a.invoice.date || "")));
+}
+
+function exportPaidInvoices() {
+  const rows = paidInvoiceRows();
+  const quote = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
+  const header = ["Factura", "Fecha", "Sucursal", "Cliente", "Servicio", "Producto", "Colaborador", "Total", "IVA", "Metodo"];
+  const lines = [header.map(quote).join(",")];
+  rows.forEach((row) => {
+    lines.push(
+      [
+        row.invoice.id,
+        row.invoice.date,
+        row.branchName,
+        row.clientName,
+        row.procedureName,
+        row.productName || "",
+        row.collaborator,
+        invoiceTotal(row.invoice),
+        invoiceIva(row.invoice),
+        paymentMethodLabel(row.invoice.paymentMethod)
+      ]
+        .map(quote)
+        .join(",")
+    );
+  });
+  downloadFile(`chic-co-facturas-pagadas-${pagosPeriod}-${todayISO()}.csv`, "﻿" + lines.join("\n"), "text/csv;charset=utf-8");
+  showToast("Facturas pagadas exportadas");
+}
 
 function branchLabel(branchId) {
   return branchOptions.find((branch) => branch.id === branchId)?.label || branchId;
@@ -1526,6 +1577,96 @@ const viewRenderers = {
           ${dashboardBreakdownTable("Por servicio", byService, "Servicio")}
           ${dashboardBreakdownTable("Por producto", byProduct, "Producto")}
         </div>
+      </section>
+    `;
+  },
+
+  pagos() {
+    const period = pagosPeriod;
+    const rows = paidInvoiceRows(period, pagosBranch);
+    const totalCobrado = rows.reduce((sum, row) => sum + invoiceTotal(row.invoice), 0);
+    const totalIva = rows.reduce((sum, row) => sum + invoiceIva(row.invoice), 0);
+
+    const periodTabs = dashboardPeriods
+      .map(
+        (item) =>
+          `<button type="button" class="dash-tab${item.id === period ? " is-active" : ""}" data-pagos-period="${item.id}">${escapeHtml(item.label)}</button>`
+      )
+      .join("");
+
+    const branchFilter = [{ id: "all", label: "Todas las sucursales" }, ...branchOptions]
+      .map((branch) => `<option value="${escapeHtml(branch.id)}"${branch.id === pagosBranch ? " selected" : ""}>${escapeHtml(branch.label)}</option>`)
+      .join("");
+
+    const kpis = [
+      ["Facturas pagadas", String(rows.length)],
+      ["Total cobrado", money(totalCobrado)],
+      ["IVA incluido", money(totalIva)]
+    ]
+      .map(
+        ([label, value]) => `
+          <div class="dash-kpi">
+            <span class="dash-kpi-value">${escapeHtml(value)}</span>
+            <span class="dash-kpi-label">${escapeHtml(label)}</span>
+          </div>`
+      )
+      .join("");
+
+    const byMethod = groupInvoiceRows(rows, (row) => paymentMethodLabel(row.invoice.paymentMethod));
+    const byBranch = groupInvoiceRows(rows, (row) => row.branchName);
+
+    const tableRows = rows.length
+      ? rows
+          .map(
+            (row) => `
+        <tr>
+          <td>
+            <div class="cell-title">
+              <strong>${escapeHtml(row.invoice.id)}</strong>
+              <span>${escapeHtml(row.invoice.date || "Sin fecha")} · ${escapeHtml(row.branchName)}</span>
+            </div>
+          </td>
+          <td>${escapeHtml(row.clientName)}</td>
+          <td>${escapeHtml(row.procedureName)}${row.productName ? `<br /><span class="muted-cell">${escapeHtml(row.productName)}</span>` : ""}</td>
+          <td>${escapeHtml(row.collaborator)}</td>
+          <td class="dash-num">${money(invoiceTotal(row.invoice))}<br /><span class="dash-muted">IVA ${money(invoiceIva(row.invoice))}</span></td>
+          <td>${escapeHtml(paymentMethodLabel(row.invoice.paymentMethod))}</td>
+        </tr>`
+          )
+          .join("")
+      : `<tr><td colspan="6"><p class="dash-empty">No hay facturas pagadas en este periodo.</p></td></tr>`;
+
+    return `
+      <section class="dash">
+        <div class="dash-head">
+          <div>
+            <h2>Facturas pagadas</h2>
+            <p>Control de gerencia: facturas cobradas por completo, todas las sucursales.</p>
+          </div>
+          <div class="dash-controls">
+            <div class="dash-tabs" role="group" aria-label="Periodo">${periodTabs}</div>
+            <label class="field dash-branch"><span class="visually-hidden">Sucursal</span>
+              <select data-pagos-branch>${branchFilter}</select>
+            </label>
+            <button type="button" class="dash-export" data-pagos-export>Exportar CSV</button>
+          </div>
+        </div>
+        <div class="dash-kpis">${kpis}</div>
+        <div class="dash-grid">
+          ${dashboardBreakdownTable("Por metodo de pago", byMethod, "Metodo")}
+          ${dashboardBreakdownTable("Por sucursal", byBranch, "Sucursal")}
+        </div>
+        <section class="dash-panel dash-panel-wide">
+          <h3>Detalle de facturas pagadas</h3>
+          <div class="table-wrap">
+            <table class="dash-table">
+              <thead>
+                <tr><th>Factura</th><th>Cliente</th><th>Servicio</th><th>Colaborador</th><th class="dash-num">Total</th><th>Metodo</th></tr>
+              </thead>
+              <tbody>${tableRows}</tbody>
+            </table>
+          </div>
+        </section>
       </section>
     `;
   },
@@ -3053,6 +3194,18 @@ function handleRowActions(event) {
     return;
   }
 
+  const pagosPeriodButton = event.target.closest("[data-pagos-period]");
+  if (pagosPeriodButton) {
+    pagosPeriod = pagosPeriodButton.dataset.pagosPeriod;
+    renderView();
+    return;
+  }
+
+  if (event.target.closest("[data-pagos-export]")) {
+    exportPaidInvoices();
+    return;
+  }
+
   if (switchUserButton) {
     switchUser(switchUserButton.dataset.switchUser);
     return;
@@ -3730,6 +3883,12 @@ document.addEventListener("change", (event) => {
   if (stationSelect) {
     if (!requireWrite("enCurso")) return;
     setActiveStation(stationSelect.dataset.stationSelect, stationSelect.value);
+  }
+
+  const pagosBranchSelect = event.target.closest("[data-pagos-branch]");
+  if (pagosBranchSelect) {
+    pagosBranch = pagosBranchSelect.value;
+    renderView();
   }
 });
 
