@@ -2610,3 +2610,16 @@ th.num {
 .pay-totals td { border-top: 2px solid var(--line-strong); background: var(--surface-2); }
 .is-paid-row { background: color-mix(in srgb, var(--ok, #2ecc71) 8%, transparent); }
 .is-muted-row td { opacity: 0.6; }
+
+/* Cuentas por pagar a proveedores */
+.proveedores-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.is-overdue-row { background: color-mix(in srgb, var(--crit, #e74c3c) 8%, transparent); }
+.pay-overdue { color: var(--crit, #c0392b); font-size: 11px; font-weight: 700; }
+.pay-attach { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pay-attach-thumb { padding: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; width: 44px; height: 44px; background: var(--surface-2); cursor: pointer; }
+.pay-attach-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pay-attach-none { color: var(--ink-3); font-size: 11.5px; }
+.pay-upload { cursor: pointer; }
+.pay-pay { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.pay-pay select { border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); padding: 5px 8px; border-radius: 8px; font-size: 12px; }
+.pay-actions { gap: 6px; flex-wrap: wrap; }

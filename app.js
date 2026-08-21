@@ -5,7 +5,7 @@ const fallbackPasswordHash = "d3ad9315b7be5dd53b31a273b3b3aba5defe700808305aa16a
 const receptionPasswordHash = "5813f24ae4432b277c8c92a78bf035caaa8f5a9ad0031441f5eccd2d4c0e2fd0";
 const monicaPasswordHash = "e7d081ee45073bc0da9fd633a609db90be0adc2abac6ac47e79e375544e81c22";
 
-const permissionModules = ["clientes", "inventario", "procedimientos", "enCurso", "planes", "citas", "facturacion", "usuarios"];
+const permissionModules = ["clientes", "inventario", "procedimientos", "enCurso", "planes", "citas", "facturacion", "proveedores", "usuarios"];
 
 const moduleNames = {
   clientes: "Clientes",
@@ -15,6 +15,7 @@ const moduleNames = {
   planes: "Planes",
   citas: "Citas",
   facturacion: "Facturacion",
+  proveedores: "Cuentas por pagar",
   usuarios: "Usuarios"
 };
 
@@ -36,6 +37,13 @@ const rolePresets = {
   admin: {
     label: "Administrador",
     permissions: buildPermissions(permissionModules)
+  },
+  gerente: {
+    label: "Gerente",
+    permissions: buildPermissions(
+      ["clientes", "inventario", "procedimientos", "enCurso", "planes", "citas", "facturacion", "proveedores"],
+      ["clientes", "inventario", "citas", "facturacion", "proveedores"]
+    )
   },
   recepcion: {
     label: "Recepcion",
@@ -92,7 +100,7 @@ const systemUserAuth = {
   },
   "USR-004": {}
 };
-const branchDataKeys = ["clients", "products", "procedures", "activeProcedures", "plans", "appointments", "invoices", "stockMovements", "locations", "stations"];
+const branchDataKeys = ["clients", "products", "procedures", "activeProcedures", "plans", "appointments", "invoices", "stockMovements", "locations", "stations", "payables"];
 
 const branchOptions = [
   { id: "rohrmoser", label: "Chic & Co Rohrmoser" },
@@ -175,7 +183,8 @@ function emptyBranchData() {
     invoices: [],
     stockMovements: [],
     locations: [],
-    stations: []
+    stations: [],
+    payables: []
   };
 }
 
@@ -245,10 +254,10 @@ const moduleConfig = {
     description: "Conecta las aplicaciones que usa el negocio: facturacion, marketing y correo.",
     actions: []
   },
-  pagos: {
-    title: "Facturas pagadas",
-    description: "Control de gerencia sobre las facturas cobradas por completo, con totales y export.",
-    actions: []
+  proveedores: {
+    title: "Cuentas por pagar",
+    description: "Facturas de proveedores por pagar: cargalas, adjunta factura y comprobante, y controla que ya se pagaron.",
+    actions: [{ label: "Nueva factura por pagar", action: "focusForm" }]
   },
   planilla: {
     title: "Planilla y RRHH",
@@ -895,7 +904,7 @@ function branchScopeOptions(selected = "all") {
 
 // Modulos de direccion, solo para administradores; no pasan por la matriz de
 // permisos por modulo.
-const adminOnlyModules = new Set(["dashboard", "integraciones", "pagos"]);
+const adminOnlyModules = new Set(["dashboard", "integraciones"]);
 
 // Acceso a planilla/RRHH: el super siempre, y cualquier cuenta a la que el super
 // le asigno payrollAccess. NO basta con ser admin: es un acceso designado.
@@ -1144,6 +1153,11 @@ function moduleMetrics(moduleName) {
       [state.users.length, "Usuarios"],
       [state.users.filter((user) => user.role === "admin" && user.active).length, "Acceso total"],
       [state.users.filter((user) => user.active).length, "Activos"]
+    ],
+    proveedores: [
+      [money(payablesList().filter((i) => i.estado !== "Pagada").reduce((s, i) => s + Number(i.monto || 0), 0)), "Por pagar"],
+      [payablesList().filter(payableIsOverdue).length, "Vencidas"],
+      [payablesList().filter((i) => i.estado === "Pagada").length, "Pagadas"]
     ]
   };
 
@@ -1367,8 +1381,6 @@ function statusBadge(status) {
 
 let dashboardPeriod = "mes";
 // Control de facturas pagadas (gerencia): periodo y sucursal filtrada.
-let pagosPeriod = "mes";
-let pagosBranch = "all";
 
 const dashboardPeriods = [
   { id: "hoy", label: "Hoy" },
@@ -1376,47 +1388,108 @@ const dashboardPeriods = [
   { id: "todo", label: "Todo" }
 ];
 
-// Una factura esta "pagada" cuando lo cobrado cubre el total (con IVA). Un abono
-// parcial no cuenta como pagada.
-function isInvoicePaid(invoice) {
-  return Number(invoice.paid || 0) >= invoiceTotal(invoice) && invoiceTotal(invoice) > 0;
+/* --- Cuentas por pagar a proveedores ------------------------------------
+   Los gerentes cargan las facturas de proveedores por pagar y adjuntan la
+   factura; al pagar adjuntan el comprobante. Son datos de la sucursal, asi que
+   heredan el aislamiento: cada gerente ve solo las de su sede; los duenos, todas.
+*/
+
+let proveedoresFilter = "todas";
+
+function payablesList() {
+  return Array.isArray(state.payables) ? state.payables : [];
 }
 
-// Filas de facturas PAGADAS del periodo y sucursal elegidos, mas recientes
-// primero. Solo la gerencia (admin/super) llega aqui, asi que ve todas las sedes.
-function paidInvoiceRows(period = pagosPeriod, branchFilter = pagosBranch) {
-  return allInvoicesAcrossBranches()
-    .filter((row) => isInvoicePaid(row.invoice))
-    .filter((row) => invoiceInPeriod(row.invoice, period))
-    .filter((row) => branchFilter === "all" || row.branchId === branchFilter)
-    .sort((a, b) => String(b.invoice.date || "").localeCompare(String(a.invoice.date || "")));
+function payableIsOverdue(item) {
+  return item.estado !== "Pagada" && item.fechaVencimiento && item.fechaVencimiento < todayISO();
 }
 
-function exportPaidInvoices() {
-  const rows = paidInvoiceRows();
+function addPayable(data) {
+  const proveedor = (data.proveedor || "").trim();
+  if (!proveedor) return showToast("Escribe el nombre del proveedor");
+  state.payables = payablesList();
+  state.payables.unshift({
+    id: nextId("CXP", state.payables),
+    proveedor,
+    concepto: (data.concepto || "").trim(),
+    monto: Number(data.monto || 0),
+    fechaEmision: (data.fechaEmision || "").trim(),
+    fechaVencimiento: (data.fechaVencimiento || "").trim(),
+    estado: "Pendiente",
+    fechaPago: "",
+    metodoPago: "",
+    facturaImageId: "",
+    comprobanteImageId: "",
+    notes: (data.notes || "").trim(),
+    createdBy: currentUser()?.name || ""
+  });
+  persistAndRender("Factura por pagar registrada");
+}
+
+function markPayablePaid(id, metodo) {
+  const item = payablesList().find((p) => p.id === id);
+  if (!item) return;
+  item.estado = "Pagada";
+  item.fechaPago = todayISO();
+  if (metodo) item.metodoPago = metodo;
+  persistAndRender("Marcada como pagada");
+}
+
+function markPayablePending(id) {
+  const item = payablesList().find((p) => p.id === id);
+  if (!item) return;
+  item.estado = "Pendiente";
+  item.fechaPago = "";
+  persistAndRender("Marcada como pendiente");
+}
+
+function removePayable(id) {
+  const item = payablesList().find((p) => p.id === id);
+  if (!item) return;
+  if (!confirm(`¿Eliminar la cuenta por pagar de ${item.proveedor}?`)) return;
+  state.payables = payablesList().filter((p) => p.id !== id);
+  persistAndRender("Cuenta por pagar eliminada");
+}
+
+async function uploadPayableImage(file) {
+  if (!file) return "";
+  if (!/^image\//i.test(file.type)) throw new Error("Adjunta una foto (JPG o PNG) de la factura o el comprobante.");
+  if (typeof backendRequest !== "function") throw new Error("Sin conexion con el servidor");
+  const dataUrl = await downscaleImage(file);
+  const response = await backendRequest("/media", {
+    method: "POST",
+    body: JSON.stringify({ dataUrl, branchId: state.currentBranchId || "", kind: "payable" })
+  });
+  return response?.image?.id || "";
+}
+
+async function attachPayableImage(id, field, file) {
+  const item = payablesList().find((p) => p.id === id);
+  if (!item || !file) return;
+  try {
+    showToast("Subiendo...");
+    const imageId = await uploadPayableImage(file);
+    if (!imageId) throw new Error("No se recibio la imagen");
+    item[field] = imageId;
+    persistAndRender(field === "facturaImageId" ? "Factura adjuntada" : "Comprobante adjuntado");
+  } catch (error) {
+    showToast(error.message || "No se pudo subir el archivo");
+  }
+}
+
+function exportPayables() {
   const quote = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
-  const header = ["Factura", "Fecha", "Sucursal", "Cliente", "Servicio", "Producto", "Colaborador", "Total", "IVA", "Metodo"];
+  const header = ["Proveedor", "Concepto", "Monto", "Emision", "Vencimiento", "Estado", "Fecha pago", "Metodo", "Cargada por"];
   const lines = [header.map(quote).join(",")];
-  rows.forEach((row) => {
+  payablesList().forEach((item) => {
     lines.push(
-      [
-        row.invoice.id,
-        row.invoice.date,
-        row.branchName,
-        row.clientName,
-        row.procedureName,
-        row.productName || "",
-        row.collaborator,
-        invoiceTotal(row.invoice),
-        invoiceIva(row.invoice),
-        paymentMethodLabel(row.invoice.paymentMethod)
-      ]
+      [item.proveedor, item.concepto, item.monto, item.fechaEmision, item.fechaVencimiento, item.estado, item.fechaPago, item.metodoPago, item.createdBy]
         .map(quote)
         .join(",")
     );
   });
-  downloadFile(`chic-co-facturas-pagadas-${pagosPeriod}-${todayISO()}.csv`, "﻿" + lines.join("\n"), "text/csv;charset=utf-8");
-  showToast("Facturas pagadas exportadas");
+  downloadFile(`chic-co-cuentas-por-pagar-${todayISO()}.csv`, "﻿" + lines.join("\n"), "text/csv;charset=utf-8");
+  showToast("Cuentas por pagar exportadas");
 }
 
 function branchLabel(branchId) {
@@ -1932,94 +2005,109 @@ const viewRenderers = {
     `;
   },
 
-  pagos() {
-    const period = pagosPeriod;
-    const rows = paidInvoiceRows(period, pagosBranch);
-    const totalCobrado = rows.reduce((sum, row) => sum + invoiceTotal(row.invoice), 0);
-    const totalIva = rows.reduce((sum, row) => sum + invoiceIva(row.invoice), 0);
+  proveedores(search) {
+    const items = payablesList();
+    const filter = proveedoresFilter;
 
-    const periodTabs = dashboardPeriods
-      .map(
-        (item) =>
-          `<button type="button" class="dash-tab${item.id === period ? " is-active" : ""}" data-pagos-period="${item.id}">${escapeHtml(item.label)}</button>`
-      )
-      .join("");
+    const vencidasCount = items.filter(payableIsOverdue).length;
 
-    const branchFilter = [{ id: "all", label: "Todas las sucursales" }, ...branchOptions]
-      .map((branch) => `<option value="${escapeHtml(branch.id)}"${branch.id === pagosBranch ? " selected" : ""}>${escapeHtml(branch.label)}</option>`)
-      .join("");
+    const chip = (id, label, count) =>
+      `<button class="filter-chip ${filter === id ? "is-active" : ""}" type="button" aria-pressed="${filter === id}" data-proveedores-filter="${id}">${escapeHtml(label)}${count === null ? "" : ` <b>${count}</b>`}</button>`;
+    const filters = `
+      <div class="proveedores-bar">
+        <div class="filter-bar" role="group" aria-label="Filtrar cuentas por pagar">
+          ${chip("todas", "Todas", items.length)}
+          ${chip("pendientes", "Pendientes", items.filter((i) => i.estado !== "Pagada").length)}
+          ${chip("vencidas", "Vencidas", vencidasCount)}
+          ${chip("pagadas", "Pagadas", items.filter((i) => i.estado === "Pagada").length)}
+        </div>
+        <button class="secondary-action" type="button" data-proveedores-export>Exportar CSV</button>
+      </div>`;
 
-    const kpis = [
-      ["Facturas pagadas", String(rows.length)],
-      ["Total cobrado", money(totalCobrado)],
-      ["IVA incluido", money(totalIva)]
-    ]
-      .map(
-        ([label, value]) => `
-          <div class="dash-kpi">
-            <span class="dash-kpi-value">${escapeHtml(value)}</span>
-            <span class="dash-kpi-label">${escapeHtml(label)}</span>
-          </div>`
-      )
-      .join("");
+    const shown = items
+      .filter((item) => {
+        if (filter === "pendientes") return item.estado !== "Pagada";
+        if (filter === "pagadas") return item.estado === "Pagada";
+        if (filter === "vencidas") return payableIsOverdue(item);
+        return true;
+      })
+      .filter((item) => matchesSearch([item.proveedor, item.concepto, item.estado, item.metodoPago], search));
 
-    const byMethod = groupInvoiceRows(rows, (row) => paymentMethodLabel(row.invoice.paymentMethod));
-    const byBranch = groupInvoiceRows(rows, (row) => row.branchName);
+    const attach = (item, field, label) => {
+      const imageId = item[field];
+      const thumb = imageId
+        ? `<button class="pay-attach-thumb" type="button" data-photo-open="${escapeHtml(imageId)}" data-photo-name="${escapeHtml(label + " " + item.proveedor)}" title="Ver ${escapeHtml(label)}"><img data-image-id="${escapeHtml(imageId)}" alt="" /></button>`
+        : `<span class="pay-attach-none">Sin ${escapeHtml(label.toLowerCase())}</span>`;
+      const upload = canWrite("proveedores")
+        ? `<label class="row-action is-muted pay-upload"><input type="file" accept="image/*" data-payable-upload="${escapeHtml(item.id)}:${field}" hidden />${imageId ? "Cambiar" : "Adjuntar"}</label>`
+        : "";
+      return `<div class="pay-attach">${thumb}${upload}</div>`;
+    };
 
-    const tableRows = rows.length
-      ? rows
-          .map(
-            (row) => `
-        <tr>
+    const metodos = ["Transferencia", "Sinpe", "Efectivo", "Tarjeta", "Cheque"];
+    const rows = shown.length
+      ? shown
+          .map((item) => {
+            const paid = item.estado === "Pagada";
+            const overdue = payableIsOverdue(item);
+            const actions = canWrite("proveedores")
+              ? paid
+                ? `<button class="row-action is-muted" type="button" data-payable-unpay="${escapeHtml(item.id)}">Marcar pendiente</button>`
+                : `<span class="pay-pay">
+                     <select data-payable-method="${escapeHtml(item.id)}">${metodos.map((m) => `<option value="${m}"${item.metodoPago === m ? " selected" : ""}>${m}</option>`).join("")}</select>
+                     <button class="row-action" type="button" data-payable-pay="${escapeHtml(item.id)}">Marcar pagada</button>
+                   </span>`
+              : "";
+            const del = canWrite("proveedores") ? `<button class="row-action is-warning" type="button" data-payable-del="${escapeHtml(item.id)}">Eliminar</button>` : "";
+            return `
+        <tr class="${paid ? "is-paid-row" : overdue ? "is-overdue-row" : ""}">
           <td>
             <div class="cell-title">
-              <strong>${escapeHtml(row.invoice.id)}</strong>
-              <span>${escapeHtml(row.invoice.date || "Sin fecha")} · ${escapeHtml(row.branchName)}</span>
+              <strong>${escapeHtml(item.proveedor)}</strong>
+              <span>${escapeHtml(item.concepto || "Sin concepto")}</span>
             </div>
           </td>
-          <td>${escapeHtml(row.clientName)}</td>
-          <td>${escapeHtml(row.procedureName)}${row.productName ? `<br /><span class="muted-cell">${escapeHtml(row.productName)}</span>` : ""}</td>
-          <td>${escapeHtml(row.collaborator)}</td>
-          <td class="dash-num">${money(invoiceTotal(row.invoice))}<br /><span class="dash-muted">IVA ${money(invoiceIva(row.invoice))}</span></td>
-          <td>${escapeHtml(paymentMethodLabel(row.invoice.paymentMethod))}</td>
-        </tr>`
-          )
+          <td class="dash-num">${money(item.monto)}</td>
+          <td>${item.fechaVencimiento ? escapeHtml(item.fechaVencimiento) : "<span class='muted-cell'>—</span>"}${overdue ? '<br /><span class="pay-overdue">Vencida</span>' : ""}</td>
+          <td>${paid ? statusBadge("Pagada") + `<br /><span class="dash-muted">${escapeHtml(item.fechaPago || "")} · ${escapeHtml(item.metodoPago || "")}</span>` : statusBadge("Pendiente")}</td>
+          <td>${attach(item, "facturaImageId", "Factura")}</td>
+          <td>${attach(item, "comprobanteImageId", "Comprobante")}</td>
+          <td><div class="inline-actions pay-actions">${actions}${del}</div></td>
+        </tr>`;
+          })
           .join("")
-      : `<tr><td colspan="6"><p class="dash-empty">No hay facturas pagadas en este periodo.</p></td></tr>`;
+      : `<tr><td colspan="7"><div class="empty-state">No hay cuentas por pagar con este filtro. Carga la primera con el formulario.</div></td></tr>`;
 
-    return `
-      <section class="dash">
-        <div class="dash-head">
-          <div>
-            <h2>Facturas pagadas</h2>
-            <p>Control de gerencia: facturas cobradas por completo, todas las sucursales.</p>
-          </div>
-          <div class="dash-controls">
-            <div class="dash-tabs" role="group" aria-label="Periodo">${periodTabs}</div>
-            <label class="field dash-branch"><span class="visually-hidden">Sucursal</span>
-              <select data-pagos-branch>${branchFilter}</select>
-            </label>
-            <button type="button" class="dash-export" data-pagos-export>Exportar CSV</button>
-          </div>
+    const form = `
+      <form class="data-form" data-form="payable" autocomplete="off">
+        <div class="form-grid">
+          ${inputField("Proveedor", "proveedor", "text", "", "required")}
+          ${inputField("Concepto", "concepto", "text", "")}
+          ${inputField("Monto", "monto", "number", "0", "min='0' step='100' required")}
+          ${inputField("Fecha de emision", "fechaEmision", "date", "")}
+          ${inputField("Fecha de vencimiento", "fechaVencimiento", "date", "")}
+          ${textareaField("Notas", "notes")}
         </div>
-        <div class="dash-kpis">${kpis}</div>
-        <div class="dash-grid">
-          ${dashboardBreakdownTable("Por metodo de pago", byMethod, "Metodo")}
-          ${dashboardBreakdownTable("Por sucursal", byBranch, "Sucursal")}
-        </div>
-        <section class="dash-panel dash-panel-wide">
-          <h3>Detalle de facturas pagadas</h3>
-          <div class="table-wrap">
-            <table class="dash-table">
-              <thead>
-                <tr><th>Factura</th><th>Cliente</th><th>Servicio</th><th>Colaborador</th><th class="dash-num">Total</th><th>Metodo</th></tr>
-              </thead>
-              <tbody>${tableRows}</tbody>
-            </table>
-          </div>
-        </section>
-      </section>
-    `;
+        <p class="payroll-sub">Guarda la factura y luego adjunta la foto de la factura (y el comprobante cuando pagues) desde la tabla.</p>
+        <button class="primary-action" type="submit">Guardar factura por pagar</button>
+      </form>`;
+
+    const records = `
+      ${filters}
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Proveedor</th><th class="dash-num">Monto</th><th>Vence</th><th>Estado</th><th>Factura</th><th>Comprobante</th><th>Accion</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+
+    return renderLayout(
+      moduleMetrics("proveedores"),
+      "Nueva factura por pagar",
+      form,
+      "Cuentas por pagar a proveedores",
+      records
+    );
   },
 
   planilla() {
@@ -3491,7 +3579,8 @@ function handleSubmit(event) {
     user: addUser,
     staff: addStaff,
     benefit: addBenefit,
-    vacation: addVacation
+    vacation: addVacation,
+    payable: addPayable
   };
 
   handlers[form.dataset.form]?.(data);
@@ -3834,15 +3923,34 @@ function handleRowActions(event) {
     return;
   }
 
-  const pagosPeriodButton = event.target.closest("[data-pagos-period]");
-  if (pagosPeriodButton) {
-    pagosPeriod = pagosPeriodButton.dataset.pagosPeriod;
+  const proveedoresFilterBtn = event.target.closest("[data-proveedores-filter]");
+  if (proveedoresFilterBtn) {
+    proveedoresFilter = proveedoresFilterBtn.dataset.proveedoresFilter;
     renderView();
     return;
   }
-
-  if (event.target.closest("[data-pagos-export]")) {
-    exportPaidInvoices();
+  if (event.target.closest("[data-proveedores-export]")) {
+    exportPayables();
+    return;
+  }
+  const payablePayBtn = event.target.closest("[data-payable-pay]");
+  if (payablePayBtn) {
+    if (!requireWrite("proveedores")) return;
+    const id = payablePayBtn.dataset.payablePay;
+    const method = document.querySelector(`[data-payable-method="${id}"]`)?.value || "";
+    markPayablePaid(id, method);
+    return;
+  }
+  const payableUnpayBtn = event.target.closest("[data-payable-unpay]");
+  if (payableUnpayBtn) {
+    if (!requireWrite("proveedores")) return;
+    markPayablePending(payableUnpayBtn.dataset.payableUnpay);
+    return;
+  }
+  const payableDelBtn = event.target.closest("[data-payable-del]");
+  if (payableDelBtn) {
+    if (!requireWrite("proveedores")) return;
+    removePayable(payableDelBtn.dataset.payableDel);
     return;
   }
 
@@ -4571,10 +4679,12 @@ document.addEventListener("change", (event) => {
     setActiveStation(stationSelect.dataset.stationSelect, stationSelect.value);
   }
 
-  const pagosBranchSelect = event.target.closest("[data-pagos-branch]");
-  if (pagosBranchSelect) {
-    pagosBranch = pagosBranchSelect.value;
-    renderView();
+  const payableUpload = event.target.closest("[data-payable-upload]");
+  if (payableUpload && payableUpload.files?.[0]) {
+    if (!requireWrite("proveedores")) return;
+    const [id, field] = payableUpload.dataset.payableUpload.split(":");
+    attachPayableImage(id, field, payableUpload.files[0]);
+    return;
   }
 
   const payPeriodSelect = event.target.closest("[data-payroll-period]");

@@ -126,9 +126,10 @@ const moduleWriteCollections = {
   planes: ["plans", "activeProcedures", "appointments"],
   citas: ["appointments", "activeProcedures"],
   facturacion: ["invoices", "products", "stockMovements"],
+  proveedores: ["payables"],
   usuarios: ["users"]
 };
-const branchDataCollections = ["clients", "products", "procedures", "activeProcedures", "plans", "appointments", "invoices", "stockMovements", "locations", "stations"];
+const branchDataCollections = ["clients", "products", "procedures", "activeProcedures", "plans", "appointments", "invoices", "stockMovements", "locations", "stations", "payables"];
 const auditLogLimit = 300;
 
 const mimeTypes = {
@@ -170,7 +171,7 @@ function contentSecurityPolicy(pathname) {
       "default-src 'self'",
       `script-src 'self' 'unsafe-inline' ${pixelScriptHosts}`,
       "style-src 'self' 'unsafe-inline'",
-      `img-src 'self' data: ${pixelImgHosts}`,
+      `img-src 'self' data: blob: ${pixelImgHosts}`,
       `connect-src 'self' ${pixelConnectHosts}`,
       "object-src 'none'",
       "base-uri 'self'",
@@ -178,7 +179,9 @@ function contentSecurityPolicy(pathname) {
       "form-action 'self'"
     ].join("; ");
   }
-  return "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'";
+  // blob: es necesario para mostrar fotos (producto, factura, comprobante): se
+  // descargan autenticadas y se pintan desde un URL de objeto en memoria.
+  return "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'";
 }
 
 function requestPathname(req) {
@@ -1457,6 +1460,18 @@ function referencedImageIds(state) {
   collect(state?.products);
   Object.values(state?.branches || {}).forEach((branch) => collect(branch?.products));
 
+  // Adjuntos de cuentas por pagar (factura y comprobante). Sin esto, la
+  // recoleccion de huerfanas los borraria una hora despues de adjuntarlos.
+  const collectPayables = (payables) => {
+    if (!Array.isArray(payables)) return;
+    payables.forEach((item) => {
+      if (item?.facturaImageId) ids.add(String(item.facturaImageId));
+      if (item?.comprobanteImageId) ids.add(String(item.comprobanteImageId));
+    });
+  };
+  collectPayables(state?.payables);
+  Object.values(state?.branches || {}).forEach((branch) => collectPayables(branch?.payables));
+
   // El logotipo del negocio tambien vive en el almacen de imagenes. Sin esto,
   // la recoleccion de huerfanas lo borraria una hora despues de subirlo, porque
   // ningun producto lo referencia.
@@ -1468,9 +1483,10 @@ async function handleMediaUpload(req, res, session) {
   const state = await ensureState();
   const user = sessionUserFromState(state, session);
 
-  // Subir una foto de producto es escribir en inventario.
-  if (!canWriteModule(user, "inventario") && !isFullAccessUser(user)) {
-    sendError(req, res, 403, "Este usuario no puede modificar el inventario.");
+  // Subir una imagen es escribir en inventario (foto de producto) o en cuentas
+  // por pagar (adjuntar factura/comprobante de un proveedor).
+  if (!canWriteModule(user, "inventario") && !canWriteModule(user, "proveedores") && !isFullAccessUser(user)) {
+    sendError(req, res, 403, "Este usuario no puede subir imagenes.");
     return;
   }
 
@@ -1480,7 +1496,7 @@ async function handleMediaUpload(req, res, session) {
     saved = await mediaStore.saveImage({
       dataUrl: payload.dataUrl,
       branchId: payload.branchId,
-      kind: "product",
+      kind: payload.kind === "payable" ? "payable" : "product",
       ownerId: payload.ownerId,
       userId: user.id
     });
