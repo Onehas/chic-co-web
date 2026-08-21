@@ -1296,6 +1296,62 @@ function groupInvoiceRows(rows, keyFn) {
     .sort((a, b) => b.facturado - a.facturado);
 }
 
+// Descarga un archivo generado en el navegador.
+function downloadFile(name, content, type) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = name;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+// Exporta el dashboard del periodo activo a un CSV: los totales y los cuatro
+// desgloses en una sola hoja, listos para abrir en Excel.
+function exportDashboardReport() {
+  const period = dashboardPeriod;
+  const all = allInvoicesAcrossBranches().filter((row) => invoiceInPeriod(row.invoice, period));
+  const totals = sumInvoiceRows(all);
+  const periodLabel = dashboardPeriods.find((item) => item.id === period)?.label || period;
+  const quote = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
+  const lines = [];
+  lines.push(quote(`Reporte Chic & Co - ${periodLabel}`));
+  lines.push("");
+  lines.push(["Total", "Valor"].map(quote).join(","));
+  lines.push(["Facturado", totals.facturado].map(quote).join(","));
+  lines.push(["Cobrado", totals.cobrado].map(quote).join(","));
+  lines.push(["Saldo pendiente", totals.pendiente].map(quote).join(","));
+  lines.push(["Facturas", totals.count].map(quote).join(","));
+  lines.push(["Por cobrar", totals.pendientes].map(quote).join(","));
+
+  const sections = [
+    ["Por sucursal", groupInvoiceRows(all, (row) => row.branchName)],
+    ["Por colaborador", groupInvoiceRows(all, (row) => row.collaborator)],
+    ["Por servicio", groupInvoiceRows(all, (row) => row.procedureName)],
+    [
+      "Por producto",
+      groupInvoiceRows(
+        all.filter((row) => row.productName && Number(row.invoice.productAmount || 0) > 0),
+        (row) => row.productName
+      )
+    ]
+  ];
+  sections.forEach(([title, groups]) => {
+    lines.push("");
+    lines.push(quote(title));
+    lines.push(["Nombre", "Facturado", "Cobrado", "Saldo", "Facturas"].map(quote).join(","));
+    groups.forEach((group) => {
+      lines.push([group.key, group.facturado, group.cobrado, group.pendiente, group.count].map(quote).join(","));
+    });
+  });
+
+  downloadFile(`chic-co-reporte-${period}-${todayISO()}.csv`, "﻿" + lines.join("\n"), "text/csv;charset=utf-8");
+  showToast("Reporte exportado");
+}
+
 function dashboardBreakdownTable(title, groups, extraLabel) {
   if (!groups.length) {
     return `<section class="dash-panel"><h3>${escapeHtml(title)}</h3><p class="dash-empty">Sin datos en este periodo.</p></section>`;
@@ -1376,7 +1432,10 @@ const viewRenderers = {
             <h2>Saldos y ventas en vivo</h2>
             <p>Todas las sucursales juntas. Se actualiza solo cuando entra una factura.</p>
           </div>
-          <div class="dash-tabs" role="group" aria-label="Periodo">${periodTabs}</div>
+          <div class="dash-controls">
+            <div class="dash-tabs" role="group" aria-label="Periodo">${periodTabs}</div>
+            <button type="button" class="dash-export" data-dashboard-export>Exportar CSV</button>
+          </div>
         </div>
         <div class="dash-kpis">${kpis}</div>
         <div class="dash-grid">
@@ -2894,6 +2953,11 @@ function handleRowActions(event) {
   if (dashboardPeriodButton) {
     dashboardPeriod = dashboardPeriodButton.dataset.dashboardPeriod;
     renderView();
+    return;
+  }
+
+  if (event.target.closest("[data-dashboard-export]")) {
+    exportDashboardReport();
     return;
   }
 
