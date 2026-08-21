@@ -80,6 +80,9 @@
     </section>
 
     <header class="topbar">
+      <button class="nav-toggle" type="button" id="navToggle" aria-label="Abrir menu" aria-expanded="false" aria-controls="sidebarNav">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>
+      </button>
       <div class="brand">
         <div class="brand-mark">C&C</div>
         <div class="brand-copy">
@@ -134,7 +137,8 @@
     <div class="dropdown-layer" id="dropdownLayer"></div>
 
     <main class="app-shell">
-      <aside class="sidebar" aria-label="Modulos del salon">
+      <div class="nav-scrim" id="navScrim" aria-hidden="true"></div>
+      <aside class="sidebar" id="sidebarNav" aria-label="Modulos del salon">
         <section class="sidebar-brand">
           <img src="assets/chic-co-logo-black.png" alt="Chic & Co" />
           <div>
