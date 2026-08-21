@@ -99,6 +99,11 @@ const branchOptions = [
   { id: "alajuela", label: "Chic & Co Alajuela" }
 ];
 
+// Sucursales validas para atar una cuenta. "all" = todas las sedes. Se declara
+// junto a branchOptions porque normalizeUser lo usa al construir el estado
+// inicial, antes de que corra el resto del archivo.
+const branchScopeValues = ["all", ...branchOptions.map((branch) => branch.id)];
+
 const procedureSpecialists = [
   { name: "Andrea Morales", focus: "Faciales" },
   { name: "Paola Jimenez", focus: "Color" },
@@ -444,9 +449,19 @@ function normalizeUser(user) {
   const role = rolePresets[user.role] ? user.role : "recepcion";
   const basePermissions = clone(rolePresets[role].permissions);
   const savedPermissions = user.permissions || {};
+  // Super y admin siempre ven todas las sucursales; el resto conserva la sede
+  // que se le asigno, o "all" si nunca se le asigno una (compatibilidad).
+  const savedScope = typeof user.branchScope === "string" ? user.branchScope.trim() : "";
+  const branchScope =
+    role === "super" || role === "admin"
+      ? "all"
+      : branchScopeValues.includes(savedScope) && savedScope
+        ? savedScope
+        : "all";
   return {
     ...user,
     role,
+    branchScope,
     active: user.active !== false,
     passwordHash: user.passwordHash || fallbackPasswordHash,
     permissions: permissionModules.reduce((permissions, moduleName) => {
@@ -514,6 +529,13 @@ function syncCurrentBranchData() {
 function switchBranch(branchId) {
   const nextBranch = branchOptions.find((branch) => branch.id === branchId);
   if (!nextBranch) return;
+  // Blindaje en cliente: una cuenta atada no puede cambiar a una sede que no le
+  // toca. El servidor ya no le envia esos datos, pero esto evita hasta el
+  // intento y un estado local inconsistente.
+  if (!canAccessBranch(branchId)) {
+    showToast("Su cuenta solo tiene acceso a su sucursal.");
+    return;
+  }
   if (state.currentBranchId === branchId) {
     closeDropdown();
     showToast(`Sucursal activa: ${nextBranch.label}`);
@@ -780,6 +802,43 @@ function isAdminRole(user = currentUser()) {
   return Boolean(user?.active && (user.role === "super" || user.role === "admin"));
 }
 
+// Sucursal a la que esta atada una cuenta. Super y admin ven todas; el resto
+// queda en la sede que el super le asigno (`branchScope`). Sin asignacion se
+// asume "all" para no romper cuentas viejas. Espeja la logica del servidor:
+// aqui es solo para no mostrar lo que el servidor de todos modos no envia.
+function userBranchScope(user = currentUser()) {
+  if (isAdminRole(user)) return "all";
+  const scope = typeof user?.branchScope === "string" ? user.branchScope.trim() : "";
+  return scope || "all";
+}
+
+function allowedBranchOptions(user = currentUser()) {
+  const scope = userBranchScope(user);
+  if (scope === "all") return branchOptions;
+  return branchOptions.filter((branch) => branch.id === scope);
+}
+
+function canAccessBranch(branchId, user = currentUser()) {
+  const scope = userBranchScope(user);
+  return scope === "all" || scope === branchId;
+}
+
+function branchScopeLabel(scope) {
+  if (!scope || scope === "all") return "Todas las sucursales";
+  return branchOptions.find((branch) => branch.id === scope)?.label || scope;
+}
+
+function branchScopeOptions(selected = "all") {
+  return [
+    { value: "all", label: "Todas las sucursales", selected: selected === "all" },
+    ...branchOptions.map((branch) => ({
+      value: branch.id,
+      label: branch.label,
+      selected: branch.id === selected
+    }))
+  ];
+}
+
 // Modulos de direccion, solo para administradores; no pasan por la matriz de
 // permisos por modulo.
 const adminOnlyModules = new Set(["dashboard", "integraciones"]);
@@ -933,7 +992,22 @@ function setModule(moduleName, options = {}) {
   }
 }
 
+// Si la sucursal activa quedo fuera del alcance del usuario (por ejemplo una
+// cuenta que antes veia todas y el super acaba de atar a una sede), se corrige
+// antes de dibujar: nunca se muestran datos de una sucursal que no le toca.
+function enforceBranchScope() {
+  if (canAccessBranch(state.currentBranchId)) return;
+  const target = allowedBranchOptions()[0];
+  if (!target) return;
+  syncCurrentBranchData();
+  state.currentBranchId = target.id;
+  state.branches = state.branches || defaultBranches();
+  state.branches[target.id] = normalizeBranchData(state.branches[target.id], defaultBranches()[target.id]);
+  writeBranchData(state, state.branches[target.id]);
+}
+
 function renderAll() {
+  enforceBranchScope();
   renderActiveUser();
   renderModuleAccess();
   renderSummary();
@@ -2022,6 +2096,7 @@ const viewRenderers = {
               </div>
             </td>
             <td>${escapeHtml(roleLabel(user.role))}<br />${escapeHtml(user.function)}</td>
+            <td>${escapeHtml(branchScopeLabel(user.branchScope))}</td>
             <td>${user.active ? statusBadge("Activo") : statusBadge("Pausado")}</td>
             <td><div class="permission-list">${permissionBadges}</div></td>
             <td>
@@ -2053,10 +2128,11 @@ const viewRenderers = {
           ${inputField("Email", "email", "email", "", "required")}
           ${selectField("Funcion", "role", roleOptions, "recepcion", "required")}
           ${inputField("Detalle de funcion", "function", "text", "Recepcion y agenda", "required")}
+          ${selectField("Sucursal asignada", "branchScope", branchScopeOptions(), "all")}
         </div>
         <div class="permission-preview">
           <strong>Funciones base</strong>
-          <span>Super usuario y administrador: todo. Recepcion: clientes/citas/facturacion. Especialista: sesiones. Inventario: productos.</span>
+          <span>Super usuario y administrador: todo y todas las sucursales. Recepcion: clientes/citas/facturacion. Especialista: sesiones. Inventario: productos. La "Sucursal asignada" ata a la persona a una sede: no vera ni tocara datos de la otra.</span>
         </div>
         <button class="primary-action" type="submit">Guardar usuario</button>
       </form>
@@ -2067,7 +2143,7 @@ const viewRenderers = {
       "Nuevo usuario",
       form,
       "Usuarios y permisos",
-      renderTable(["Usuario", "Funcion", "Estado", "Permisos", "Acciones"], rows)
+      renderTable(["Usuario", "Funcion", "Sucursal", "Estado", "Permisos", "Acciones"], rows)
     );
   }
 };
@@ -2795,12 +2871,22 @@ function addInvoice(data) {
 
 function addUser(data) {
   const role = rolePresets[data.role] ? data.role : "recepcion";
+  // Super y admin ven todas las sedes; para el resto se respeta la sucursal
+  // elegida (o "all" si se dejo asi).
+  const chosenScope = typeof data.branchScope === "string" ? data.branchScope.trim() : "all";
+  const branchScope =
+    role === "super" || role === "admin"
+      ? "all"
+      : branchScopeValues.includes(chosenScope)
+        ? chosenScope
+        : "all";
   state.users.push({
     id: nextId("USR", state.users),
     name: data.name.trim(),
     email: data.email.trim(),
     role,
     function: data.function.trim(),
+    branchScope,
     active: true,
     // Sin contrasena: la cuenta nueva no puede entrar hasta que su dueña la
     // cree con "¿Olvidaste tu contraseña?" en el login. Asi ninguna cuenta
@@ -3345,7 +3431,9 @@ function dropdownOptions(menuName) {
   }
 
   if (menuName === "sucursal") {
-    return branchOptions.map((branch) => ({
+    // Una cuenta atada a una sede solo ve su sucursal en el menu: no puede
+    // siquiera intentar cambiar a la otra.
+    return allowedBranchOptions().map((branch) => ({
       label: branch.label,
       branch: branch.id
     }));

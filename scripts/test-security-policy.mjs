@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import assert from "node:assert/strict";
 
 const require = createRequire(import.meta.url);
-const { applyWritePolicy, stripSensitiveState, assertPersistableState, clientIp, clampUserRoles, contentSecurityPolicy } = require("../backend/server.js");
+const { applyWritePolicy, stripSensitiveState, assertPersistableState, clientIp, clampUserRoles, guardUserDeletions, contentSecurityPolicy } = require("../backend/server.js");
 
 const permissions = {
   clientes: { read: true, write: true },
@@ -260,6 +260,57 @@ uwNext.currentUserId = "USR-UW";
 uwNext.users.push({ id: "USR-HACK", name: "Fabricada", role: "recepcion", active: true, passwordHash: "x", permissions: allPermissions });
 const uwResult = applyWritePolicy(uwNext, uwState, { userId: "USR-UW" });
 assert.ok(!uwResult.users.some((item) => item.id === "USR-HACK"), "un no-admin con usuarios.write no puede crear cuentas");
+
+/* --- Solo un super usuario puede ELIMINAR cuentas ----------------------- */
+
+const delTree = {
+  users: [
+    { id: "USR-000", role: "super", active: true },
+    { id: "ADM", role: "admin", active: true },
+    { id: "REC", role: "recepcion", active: true }
+  ]
+};
+
+// Un super puede borrar a una cuenta normal.
+const superDeletes = guardUserDeletions(
+  [{ id: "USR-000", role: "super", active: true }, { id: "ADM", role: "admin", active: true }],
+  delTree,
+  asSuper
+);
+assert.ok(!superDeletes.some((u) => u.id === "REC"), "un super si puede eliminar una cuenta");
+
+// Pero ni el super puede borrar la cuenta raiz USR-000: se conserva.
+const superDeletesRoot = guardUserDeletions(
+  [{ id: "ADM", role: "admin", active: true }, { id: "REC", role: "recepcion", active: true }],
+  delTree,
+  asSuper
+);
+assert.ok(superDeletesRoot.some((u) => u.id === "USR-000"), "la cuenta raiz nunca se elimina");
+
+// Un admin (no super) que omita una cuenta NO la borra: se re-agrega.
+const adminOmits = guardUserDeletions(
+  [{ id: "USR-000", role: "super", active: true }, { id: "ADM", role: "admin", active: true }],
+  delTree,
+  asAdmin
+);
+assert.ok(adminOmits.some((u) => u.id === "REC"), "un admin no puede eliminar cuentas (se re-agrega)");
+
+// Integrado en applyWritePolicy: el super borra de verdad; el admin no.
+const delState = baseState();
+delState.users = [
+  { id: "USR-000", name: "Super", role: "super", active: true, passwordHash: "h", permissions: allPermissions },
+  { id: "USR-ADM2", name: "Admin", role: "admin", active: true, passwordHash: "h", permissions: allPermissions },
+  { id: "USR-DEL", name: "Borrable", role: "recepcion", active: true, passwordHash: "h", permissions }
+];
+const delNextSuper = structuredClone(delState);
+delNextSuper.users = delNextSuper.users.filter((u) => u.id !== "USR-DEL");
+const delSuperResult = applyWritePolicy(delNextSuper, delState, { userId: "USR-000" });
+assert.ok(!delSuperResult.users.some((u) => u.id === "USR-DEL"), "el super elimina la cuenta via PUT");
+
+const delNextAdmin = structuredClone(delState);
+delNextAdmin.users = delNextAdmin.users.filter((u) => u.id !== "USR-DEL");
+const delAdminResult = applyWritePolicy(delNextAdmin, delState, { userId: "USR-ADM2" });
+assert.ok(delAdminResult.users.some((u) => u.id === "USR-DEL"), "un admin no puede eliminar via PUT: se conserva");
 
 /* --- CSP: la pagina publica permite pixeles, el back-office no ----------- */
 

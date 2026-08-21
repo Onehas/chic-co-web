@@ -582,6 +582,53 @@ function canWriteModule(user, moduleName) {
   return Boolean(user?.active && user.permissions?.[moduleName]?.write);
 }
 
+// Sucursal(es) que un usuario puede ver y tocar.
+//   - Super y administrador ven TODAS: dirigen el negocio completo.
+//   - Cualquier otra cuenta queda atada a la sucursal que el super usuario le
+//     asigno en `branchScope`. La recepcion de Rohrmoser jamas recibe ni puede
+//     escribir datos de Alajuela, y viceversa.
+//   - Sin una asignacion valida se asume "all" para no romper cuentas que ya
+//     existian antes de esta separacion: el super decide cuando atar cada una a
+//     su sede. La UI de usuarios lo deja hacer con un clic.
+function branchScopeOf(user) {
+  if (isFullAccessUser(user)) return "all";
+  const scope = typeof user?.branchScope === "string" ? user.branchScope.trim() : "";
+  return scope || "all";
+}
+
+function userCanAccessBranch(user, branchId) {
+  const scope = branchScopeOf(user);
+  return scope === "all" || scope === branchId;
+}
+
+// Sucursales concretas que este usuario puede tocar en el estado actual. null
+// significa "todas" (no hay que filtrar nada).
+function allowedBranchSet(state, user) {
+  const scope = branchScopeOf(user);
+  if (scope === "all") return null;
+  return new Set([scope]);
+}
+
+// Copia del estado recortada a la sucursal del usuario. Para una cuenta atada a
+// una sede, las demas sucursales NO viajan en el JSON: la separacion es real en
+// el servidor, no un simple filtro de pantalla que se pueda saltar leyendo la
+// respuesta cruda. El nivel superior (espejo de la sucursal abierta) se
+// reapunta a la sede permitida.
+function scopeStateForUser(state, user) {
+  const scope = branchScopeOf(user);
+  if (scope === "all" || !state || typeof state !== "object") return state;
+  const allowed = state.branches && state.branches[scope] ? scope : null;
+  const scoped = { ...state };
+  const branches = {};
+  if (allowed) branches[allowed] = state.branches[allowed];
+  scoped.branches = branches;
+  scoped.currentBranchId = allowed || scope;
+  branchDataCollections.forEach((collectionName) => {
+    scoped[collectionName] = allowed ? cloneValue(state.branches[allowed][collectionName] || []) : [];
+  });
+  return scoped;
+}
+
 function writableCollectionsForUser(user) {
   if (isFullAccessUser(user)) return new Set(["users", ...branchDataCollections]);
   const collections = new Set();
@@ -684,11 +731,18 @@ function applyAllowedCollections(mergedState, nextState, collectionNames) {
   });
 }
 
-function applyAllowedBranchCollections(mergedState, nextState, collectionNames) {
+// `allowedBranches`: null = todas; un Set = solo esas sucursales se aplican. Una
+// cuenta atada a una sede nunca puede escribir en otra: aunque su navegador
+// mande datos de la otra sucursal (por un bug o a proposito), aqui se ignoran y
+// la sede ajena se conserva intacta desde el estado guardado. Esto es a la vez
+// la frontera de seguridad y el seguro contra perdida de datos: un cliente que
+// normaliza a "ambas sucursales" con la ajena vacia no puede vaciar la real.
+function applyAllowedBranchCollections(mergedState, nextState, collectionNames, allowedBranches = null) {
   const branchIds = new Set([...Object.keys(mergedState.branches || {}), ...Object.keys(nextState?.branches || {})]);
   mergedState.branches = mergedState.branches || {};
 
   branchIds.forEach((branchId) => {
+    if (allowedBranches && !allowedBranches.has(branchId)) return;
     const nextBranch = nextState?.branches?.[branchId];
     if (!nextBranch) return;
     mergedState.branches[branchId] = mergedState.branches[branchId] || {};
@@ -748,6 +802,28 @@ function clampUserRoles(nextUsers, currentState, requester) {
   });
 }
 
+// Solo un super usuario puede ELIMINAR cuentas. Un admin (que tambien escribe la
+// coleccion `users`) puede editar y pausar, pero si su guardado omite a alguien,
+// esa cuenta se conserva: borrar personal es decision del super. La cuenta raiz
+// USR-000 nunca se elimina por esta via (ademas applySystemUserAuth la re-fija).
+function guardUserDeletions(nextUsers, currentState, requester) {
+  if (!Array.isArray(nextUsers)) return nextUsers;
+  if (isSuperUser(requester)) {
+    // El super puede borrar a cualquiera menos la cuenta raiz.
+    const nextIds = new Set(nextUsers.map((user) => user.id));
+    if (nextIds.has("USR-000")) return nextUsers;
+    const root = (currentState?.users || []).find((user) => user.id === "USR-000");
+    return root ? [root, ...nextUsers] : nextUsers;
+  }
+  // Requester no-super: se re-agrega cualquier cuenta que haya desaparecido.
+  const nextById = new Map(nextUsers.map((user) => [user.id, user]));
+  const restored = [...nextUsers];
+  (currentState?.users || []).forEach((current) => {
+    if (!nextById.has(current.id)) restored.push(current);
+  });
+  return restored;
+}
+
 // Toda escritura -tambien la de un super usuario- se fusiona coleccion por
 // coleccion sobre el estado guardado. Antes, la rama de acceso total escribia
 // el documento del cliente tal cual: un PUT parcial (un cliente desactualizado,
@@ -766,21 +842,42 @@ function applyWritePolicy(nextState, currentState, session) {
   const safeNextState = preserveProtectedState(nextState, currentState);
   const writableCollections = writableCollectionsForUser(user);
   const mergedState = cloneValue(currentState) || {};
+  // Sucursales que este usuario puede escribir. Para una cuenta atada a una
+  // sede, `allowedBranches` es {suSede} y toda escritura a otra sucursal se
+  // descarta mas abajo, conservando la ajena tal como estaba guardada.
+  const allowedBranches = allowedBranchSet(currentState, user);
 
   if (fullAccess) {
     applyExtraTopLevelKeys(mergedState, safeNextState);
   } else {
     mergedState.currentUserId = session.userId;
-    if (typeof nextState.currentBranchId === "string") {
+    // La sucursal activa global solo la puede cambiar quien ve todas. Una cuenta
+    // atada no mueve el espejo de nivel superior de las demas: se queda con la
+    // sede que ya tenia el estado guardado, y su GET siempre le devuelve la
+    // suya recortada de todos modos.
+    if (!allowedBranches && typeof nextState.currentBranchId === "string") {
       mergedState.currentBranchId = nextState.currentBranchId;
     }
   }
 
-  applyAllowedCollections(mergedState, safeNextState, writableCollections);
-  applyAllowedBranchCollections(mergedState, safeNextState, writableCollections);
+  // El nivel superior es solo el espejo de la sucursal activa global. Una cuenta
+  // atada no debe reescribirlo con los datos de SU sede (pisaria el espejo que
+  // ve un administrador en otra sucursal); sus cambios entran por la rama de su
+  // sucursal, que es la fuente de verdad. Por eso, cuando esta atada, no se
+  // aplican colecciones de sucursal al nivel superior.
+  if (allowedBranches) {
+    const nonBranchWritables = new Set([...writableCollections].filter((name) => !branchDataCollections.includes(name)));
+    applyAllowedCollections(mergedState, safeNextState, nonBranchWritables);
+  } else {
+    applyAllowedCollections(mergedState, safeNextState, writableCollections);
+  }
+  applyAllowedBranchCollections(mergedState, safeNextState, writableCollections, allowedBranches);
 
   if (writableCollections.has("users")) {
     mergedState.users = clampUserRoles(mergedState.users, currentState, user);
+    // Solo un super puede borrar cuentas; un admin que omita a alguien no lo
+    // elimina. Se corre despues de clampUserRoles para conservar rol/permisos.
+    mergedState.users = guardUserDeletions(mergedState.users, currentState, user);
   }
 
   if (!canWriteModule(user, "inventario")) {
@@ -1703,9 +1800,18 @@ async function handleBookingInbox(req, res, url, session, pathname) {
     return;
   }
 
+  // Sucursal a la que se limita esta cuenta ("all" = sin limite). Las
+  // solicitudes de reserva son datos de la sede, asi que una recepcion atada
+  // solo ve y resuelve las de su sucursal, nunca las de la otra.
+  const bookingScope = branchScopeOf(user);
+
   if (pathname === "/api/bookings" && req.method === "GET") {
+    const requestedBranch = String(url.searchParams.get("branchId") || "");
+    // Una cuenta atada ignora el branchId que pida el navegador y usa el suyo:
+    // no puede listar las solicitudes de otra sede pasando otro id en la URL.
+    const effectiveBranch = bookingScope === "all" ? requestedBranch : bookingScope;
     const requests = await bookingStore.listRequests({
-      branchId: String(url.searchParams.get("branchId") || ""),
+      branchId: effectiveBranch,
       status: String(url.searchParams.get("status") || ""),
       limit: Number(url.searchParams.get("limit") || 100)
     });
@@ -1734,6 +1840,12 @@ async function handleBookingInbox(req, res, url, session, pathname) {
 
   if (!existing) {
     sendError(req, res, 404, "Solicitud no encontrada.");
+    return;
+  }
+  // Una cuenta atada a una sede no puede confirmar ni rechazar una solicitud de
+  // otra sucursal, aunque conozca su id.
+  if (bookingScope !== "all" && existing.branchId !== bookingScope) {
+    sendError(req, res, 403, "Esa solicitud es de otra sucursal.");
     return;
   }
   if (existing.status !== "pending") {
@@ -1935,6 +2047,12 @@ async function handleInvoiceToAlegra(req, res, session, invoiceId) {
 
   if (!invoice) {
     sendError(req, res, 404, "Factura no encontrada.");
+    return;
+  }
+  // Una cuenta atada a una sede no puede enviar a Alegra una factura de otra
+  // sucursal, aunque la busqueda la haya encontrado recorriendo todas.
+  if (!userCanAccessBranch(user, resolvedBranchId)) {
+    sendError(req, res, 403, "Esa factura es de otra sucursal.");
     return;
   }
   if (invoice.alegra?.status === "sent") {
@@ -2206,7 +2324,9 @@ async function handleApi(req, res, url) {
       sendError(req, res, 401, "Sesion vencida. Ingrese de nuevo.");
       return;
     }
-    const safe = stripSensitiveState(state);
+    // Primero se recorta a la sucursal del usuario (una cuenta atada nunca
+    // recibe datos de otra sede) y luego se limpian los hashes.
+    const safe = stripSensitiveState(scopeStateForUser(state, user));
     // La bitacora de auditoria es solo para administradores (igual que
     // /api/audit). No debe viajar en el estado a una cuenta de recepcion.
     if (!isFullAccessUser(user)) delete safe.auditLog;
@@ -2318,12 +2438,16 @@ async function handleApi(req, res, url) {
       // El estado que se devuelve para fusionar debe traer las colecciones de
       // overlay, o el cliente creeria que se vaciaron.
       await hydrateForClient(result.currentState);
+      // Tambien el estado del conflicto se recorta a la sucursal del usuario:
+      // una cuenta atada no puede ver la otra sede ni siquiera en la respuesta
+      // 409 que usa para fusionar.
+      const conflictUser = sessionUserFromState(result.currentState, session);
       sendJson(req, res, 409, {
         ok: false,
         code: "STATE_CONFLICT",
         message: "Otro usuario guardo primero. Vuelva a cargar los datos antes de guardar.",
         stateRevision: result.currentRevision,
-        state: stripSensitiveState(result.currentState)
+        state: stripSensitiveState(scopeStateForUser(result.currentState, conflictUser))
       });
       return;
     }
@@ -2514,7 +2638,12 @@ module.exports = {
   mergeStockOnlyProducts,
   sanitizeTrackingConfig,
   clampUserRoles,
+  guardUserDeletions,
   contentSecurityPolicy,
+  branchScopeOf,
+  userCanAccessBranch,
+  allowedBranchSet,
+  scopeStateForUser,
   // El esquema de sucursales y colecciones se exporta para que una prueba de
   // paridad verifique que el cliente (app.js: branchDataKeys / branchOptions)
   // no se desincronice del servidor. Una divergencia hace que una coleccion
