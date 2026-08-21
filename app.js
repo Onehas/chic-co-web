@@ -459,17 +459,15 @@ function normalizeUser(user) {
   };
 }
 
-// Garantiza que existan las cinco cuentas autorizadas y que el super usuario
-// siga siendo super y activo. La identidad guardada (correo y nombre) manda
-// sobre la plantilla local: de lo contrario cada guardado borraria el correo
-// que el servidor tiene registrado para esa cuenta.
+// Garantiza que existan las cuentas de sistema y que el super usuario siga
+// siendo super y activo, PERO conserva todas las cuentas de personal que se
+// hayan agregado (el salon puede tener muchas colaboradoras). La identidad
+// guardada (correo y nombre) manda sobre la plantilla local: de lo contrario
+// cada guardado borraria el correo que el servidor tiene registrado.
 function ensureSystemUsers(users) {
-  const usersById = new Map(
-    users
-      .filter((user) => allowedUserIds.includes(user.id))
-      .map((user) => [user.id, normalizeUser(user)])
-  );
+  const usersById = new Map((users || []).map((user) => [user.id, normalizeUser(user)]));
 
+  // El super usuario siempre existe, es super y esta activo.
   const savedSuperUser = usersById.get(superUserAccount.id);
   usersById.set(
     superUserAccount.id,
@@ -482,7 +480,17 @@ function ensureSystemUsers(users) {
     })
   );
 
-  return allowedUserIds.map((userId) => usersById.get(userId) || normalizeUser(defaultState.users.find((user) => user.id === userId))).filter(Boolean);
+  // Las cuentas de sistema semilla existen aunque falten (backfill).
+  allowedUserIds.forEach((userId) => {
+    if (usersById.has(userId)) return;
+    const seed = defaultState.users.find((user) => user.id === userId);
+    if (seed) usersById.set(userId, normalizeUser(seed));
+  });
+
+  // Orden estable: primero las cuentas de sistema, luego el personal agregado.
+  const systemFirst = allowedUserIds.filter((id) => usersById.has(id));
+  const rest = [...usersById.keys()].filter((id) => !allowedUserIds.includes(id));
+  return [...systemFirst, ...rest].map((id) => usersById.get(id)).filter(Boolean);
 }
 
 function saveState() {
@@ -2786,11 +2794,6 @@ function addInvoice(data) {
 }
 
 function addUser(data) {
-  if (state.users.length >= allowedUserIds.length) {
-    showToast("Solo se mantienen los 5 usuarios autorizados");
-    return;
-  }
-
   const role = rolePresets[data.role] ? data.role : "recepcion";
   state.users.push({
     id: nextId("USR", state.users),
@@ -2799,10 +2802,13 @@ function addUser(data) {
     role,
     function: data.function.trim(),
     active: true,
-    passwordHash: fallbackPasswordHash,
+    // Sin contrasena: la cuenta nueva no puede entrar hasta que su dueña la
+    // cree con "¿Olvidaste tu contraseña?" en el login. Asi ninguna cuenta
+    // arranca con una contrasena por defecto compartida.
+    passwordHash: "",
     permissions: clone(rolePresets[role].permissions)
   });
-  persistAndRender("Usuario guardado");
+  persistAndRender("Usuario creado. Pidele que entre con su correo y \"¿Olvidaste tu contraseña?\" para crear su clave.");
 }
 
 function persistAndRender(message) {
