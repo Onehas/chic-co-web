@@ -200,6 +200,72 @@ assert.ok(!booking.specialistDoesProcedure(catState, "rohrmoser", "Manicurista C
 // Sin preferencia siempre pasa.
 assert.ok(booking.specialistDoesProcedure(catState, "rohrmoser", "", facial), "sin preferencia siempre vale");
 
+/* --- Roster editable por sucursal: traslados y servicios afinados -------- */
+
+// Personal repartido en dos sedes, con traslado temporal y servicios afinados.
+const rosterState = {
+  currentBranchId: "rohrmoser",
+  branches: {
+    rohrmoser: {
+      procedures: [
+        { id: "P-FAC", name: "Facial", duration: 60, price: 1, category: "Facial" },
+        { id: "P-PELO", name: "Corte", duration: 30, price: 1, category: "Cabello" }
+      ],
+      appointments: [],
+      specialists: [
+        // Estilista que ademas hace un facial puntual (serviceAdd) y una
+        // manicurista trasladada a Alajuela del 10 al 12.
+        { name: "Bea", category: "estilista", serviceAdd: ["P-FAC"], serviceRemove: [], assignments: [] },
+        { name: "Coty", category: "manicurista", assignments: [{ branch: "alajuela", from: "2026-08-10", to: "2026-08-12" }] },
+        { name: "Pausada", category: "estilista", active: false, assignments: [] }
+      ]
+    },
+    alajuela: {
+      procedures: [],
+      appointments: [],
+      // Esteticista de Alajuela que NO hace un facial concreto (serviceRemove).
+      specialists: [{ name: "Ana", category: "esteticista", serviceRemove: ["P-FAC"] }]
+    }
+  }
+};
+
+const facProc = { id: "P-FAC", name: "Facial", category: "esteticista" };
+
+// Roster por sede (sin fecha = sede base).
+assert.deepEqual(
+  booking.specialistsForBranch(rosterState, "rohrmoser").map((s) => s.name).sort(),
+  ["Bea", "Coty"],
+  "sin fecha, cada quien en su sede base (y la pausada no aparece)"
+);
+assert.deepEqual(
+  booking.specialistsForBranch(rosterState, "alajuela").map((s) => s.name),
+  ["Ana"],
+  "Alajuela tiene su propio roster"
+);
+
+// Traslado temporal: Coty esta en Alajuela del 10 al 12.
+const traslado = booking.specialistsForBranch(rosterState, "alajuela", "2026-08-11").map((s) => s.name).sort();
+assert.deepEqual(traslado, ["Ana", "Coty"], "el dia del traslado, Coty atiende en Alajuela");
+assert.ok(
+  !booking.specialistsForBranch(rosterState, "rohrmoser", "2026-08-11").some((s) => s.name === "Coty"),
+  "ese mismo dia Coty NO esta en su sede base"
+);
+// Fuera del rango, vuelve a su sede.
+assert.ok(
+  booking.specialistsForBranch(rosterState, "rohrmoser", "2026-08-20").some((s) => s.name === "Coty"),
+  "fuera del traslado, Coty vuelve a Rohrmoser"
+);
+assert.ok(booking.isKnownSpecialist(rosterState, "alajuela", "Coty", "2026-08-11"), "Coty es valida en Alajuela ese dia");
+assert.ok(!booking.isKnownSpecialist(rosterState, "alajuela", "Coty", "2026-08-20"), "Coty NO es valida en Alajuela otro dia");
+
+// Servicios afinados: serviceAdd habilita, serviceRemove excluye.
+assert.ok(booking.specialistDoesProcedure(rosterState, "rohrmoser", "Bea", facProc), "Bea hace el facial por serviceAdd, aunque sea estilista");
+assert.ok(!booking.specialistDoesProcedure(rosterState, "alajuela", "Ana", facProc), "Ana NO hace ese facial por serviceRemove, aunque sea esteticista");
+
+// Sin roster en ninguna sede: cae a la lista por defecto.
+const emptyRoster = { currentBranchId: "rohrmoser", branches: { rohrmoser: { procedures: [], appointments: [] } } };
+assert.ok(booking.specialistsForBranch(emptyRoster, "rohrmoser").length > 0, "sin roster, hay lista por defecto");
+
 /* --- Ultima validacion antes de guardar --------------------------------- */
 
 assert.equal(booking.validateSlot(baseState, "rohrmoser", "2026-08-21", "10:00", 60, [], now), "", "un hueco libre pasa");

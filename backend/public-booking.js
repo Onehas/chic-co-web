@@ -164,41 +164,107 @@ function normalizeCategory(value) {
   return SPECIALIST_CATEGORIES.includes(clean) ? clean : "";
 }
 
-// Devuelve objetos {name, category}. Sin categoria valida quedan como "" (que la
-// pagina trata como "atiende cualquier servicio").
-function specialistsForBranch(state, branchId) {
-  const raw = branchData(state, branchId).specialists;
-  const source = Array.isArray(raw) && raw.length ? raw : DEFAULT_SPECIALISTS;
+// Sede efectiva de una persona en una fecha: si tiene un traslado temporal que
+// cubre ese dia, manda esa sede; si no, su sede base (la sucursal donde vive su
+// ficha en el roster).
+function rosterBranchOn(person, homeBranch, dateISO) {
+  const day = String(dateISO || "").slice(0, 10);
+  if (!day) return homeBranch;
+  const move = (Array.isArray(person.assignments) ? person.assignments : []).find(
+    (item) => item && item.branch && String(item.from || "") <= day && day <= String(item.to || "")
+  );
+  return move ? move.branch : homeBranch;
+}
+
+// Todas las fichas de personal de todas las sucursales, con su sede base. El
+// roster es una coleccion por sucursal (state.branches[id].specialists) y una
+// persona puede aparecer en otra sede por un traslado temporal.
+function allRosterPeople(state) {
+  const branches = (state && state.branches) || {};
+  const people = [];
+  Object.keys(branches).forEach((homeBranch) => {
+    const raw = branches[homeBranch] && branches[homeBranch].specialists;
+    if (!Array.isArray(raw)) return;
+    raw.forEach((item) => {
+      const name = String(typeof item === "string" ? item : (item && item.name) || "").trim();
+      if (!name) return;
+      people.push({
+        name,
+        homeBranch,
+        category: normalizeCategory(typeof item === "object" ? item.category : ""),
+        serviceAdd: Array.isArray(item && item.serviceAdd) ? item.serviceAdd.map(String) : [],
+        serviceRemove: Array.isArray(item && item.serviceRemove) ? item.serviceRemove.map(String) : [],
+        assignments: Array.isArray(item && item.assignments) ? item.assignments : [],
+        active: typeof item === "object" ? item.active !== false : true
+      });
+    });
+  });
+  return people;
+}
+
+// Especialistas que atienden en una sucursal. Con fecha respeta los traslados
+// temporales (quien esta trasladado ese dia aparece en la sede destino y no en
+// la suya). Devuelve objetos {name, category}.
+function specialistsForBranch(state, branchId, dateISO) {
+  const all = allRosterPeople(state);
+  if (!all.length) {
+    // Instalacion sin roster todavia (o vieja): lista por defecto para no quedar
+    // vacia. Una vez que la sucursal arma su roster, esto ya no aplica.
+    const seen0 = new Set();
+    const base = [];
+    DEFAULT_SPECIALISTS.forEach((item) => {
+      const key = item.name.toLowerCase();
+      if (seen0.has(key)) return;
+      seen0.add(key);
+      base.push({ name: item.name, category: normalizeCategory(item.category) });
+    });
+    return base;
+  }
   const seen = new Set();
   const list = [];
-  source.forEach((item) => {
-    const name = String(typeof item === "string" ? item : item?.name || "").trim();
-    if (!name || seen.has(name.toLowerCase())) return;
-    seen.add(name.toLowerCase());
-    list.push({ name, category: normalizeCategory(typeof item === "object" ? item.category : "") });
+  all.forEach((person) => {
+    if (!person.active) return;
+    if (rosterBranchOn(person, person.homeBranch, dateISO) !== branchId) return;
+    const key = person.name.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    list.push({ name: person.name, category: person.category });
   });
   return list;
 }
 
-function specialistCategory(state, branchId, specialist) {
-  const want = String(specialist || "").trim().toLowerCase();
-  return specialistsForBranch(state, branchId).find((item) => item.name.toLowerCase() === want)?.category || "";
+function findRosterPerson(state, name) {
+  const want = String(name || "").trim().toLowerCase();
+  if (!want) return null;
+  return allRosterPeople(state).find((person) => person.name.toLowerCase() === want) || null;
 }
 
-function isKnownSpecialist(state, branchId, specialist) {
+function specialistCategory(state, branchId, specialist) {
+  return (findRosterPerson(state, specialist) || {}).category || "";
+}
+
+function isKnownSpecialist(state, branchId, specialist, dateISO) {
   const want = String(specialist || "").trim().toLowerCase();
   if (!want) return true; // "sin preferencia" siempre es valido
-  return specialistsForBranch(state, branchId).some((item) => item.name.toLowerCase() === want);
+  return specialistsForBranch(state, branchId, dateISO).some((item) => item.name.toLowerCase() === want);
 }
 
-// La especialista elegida debe poder hacer el servicio: su categoria coincide
-// con la del procedimiento. Sin preferencia siempre pasa; un servicio sin
-// categoria lo puede atender cualquiera.
+// La especialista elegida debe poder hacer el servicio. Se respeta su ficha:
+// primero los servicios extra que hace (serviceAdd) y los que no hace
+// (serviceRemove); si no hay excepcion, por su categoria. Sin preferencia
+// siempre pasa; un servicio sin categoria lo puede atender cualquiera.
 function specialistDoesProcedure(state, branchId, specialist, procedure) {
   if (!specialist) return true;
-  const procedureCategory = normalizeCategory(procedure?.category);
+  const person = findRosterPerson(state, specialist);
+  const procedureId = String((procedure && procedure.id) || "");
+  if (person) {
+    if (procedureId && person.serviceAdd.includes(procedureId)) return true;
+    if (procedureId && person.serviceRemove.includes(procedureId)) return false;
+  }
+  const procedureCategory = normalizeCategory(procedure && procedure.category);
   if (!procedureCategory) return true;
-  return specialistCategory(state, branchId, specialist) === procedureCategory;
+  const category = person ? person.category : specialistCategory(state, branchId, specialist);
+  return category === procedureCategory;
 }
 
 function bookingConfig(state, branchLabels) {
