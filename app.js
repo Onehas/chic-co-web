@@ -167,11 +167,6 @@ const defaultState = {
   ...emptyBranchData(),
   currentBranchId: "rohrmoser",
   currentUserId: "USR-000",
-  // Planilla / RRHH (datos de todo el negocio, no de una sucursal). Solo los ve
-  // y edita quien el super usuario designe con payrollAccess.
-  commissions: [],
-  benefits: [],
-  vacations: [],
   users: [
     superUserAccount,
     {
