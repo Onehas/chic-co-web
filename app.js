@@ -131,6 +131,13 @@ const specialistCategories = [
   { id: "manicurista", label: "Manicurista" }
 ];
 
+// Categorias de especialista: cada persona atiende solo su tipo de servicio.
+const specialistCategories = [
+  { id: "estilista", label: "Estilista" },
+  { id: "esteticista", label: "Esteticista" },
+  { id: "manicurista", label: "Manicurista" }
+];
+
 const procedureSpecialists = [
   { name: "Andrea Morales", focus: "Faciales", category: "esteticista" },
   { name: "Paola Jimenez", focus: "Color", category: "estilista" },
