@@ -215,6 +215,7 @@ const moduleConfig = {
     description: "Registra informacion de contacto, historial, notas y acciones rapidas para planes o citas.",
     actions: [
       { label: "Nuevo cliente", action: "focusForm" },
+      { label: "Importar clientes", action: "importClients" },
       { label: "Crear plan", module: "planes" }
     ]
   },
@@ -662,6 +663,15 @@ function dateToISO(date) {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+// Cumpleaños en formato corto "18 jun": el dia y el mes son lo util para
+// felicitar; el año se omite.
+function birthdayLabel(iso) {
+  const match = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return "";
+  const month = monthNames[Number(match[2]) - 1] || "";
+  return `${Number(match[3])} ${month.slice(0, 3).toLowerCase()}`;
 }
 
 // Sufijo aleatorio colision-resistente para el id. Sin esto, dos sesiones que
@@ -1373,9 +1383,14 @@ const viewRenderers = {
 
   clientes(search) {
     const rows = state.clients
-      .filter((client) => matchesSearch([client.name, client.phone, client.email, client.notes], search))
+      .filter((client) => matchesSearch([client.name, client.phone, client.email, client.notes, client.birthday], search))
       .map(
-        (client) => `
+        (client) => {
+          const extras = [];
+          if (client.birthday) extras.push(`🎂 ${escapeHtml(birthdayLabel(client.birthday))}`);
+          if (Number(client.points) > 0) extras.push(`★ ${escapeHtml(client.points)} pts`);
+          if (Number(client.creditBalance) > 0) extras.push(`saldo ${money(client.creditBalance)}`);
+          return `
           <tr>
             <td>
               <div class="cell-title">
@@ -1383,7 +1398,10 @@ const viewRenderers = {
                 <span>${escapeHtml(client.id)} | ultima visita ${escapeHtml(client.lastVisit || "Sin fecha")}</span>
               </div>
             </td>
-            <td>${escapeHtml(client.phone)}<br />${escapeHtml(client.email)}</td>
+            <td>
+              ${escapeHtml(client.phone) || "<span class='muted-cell'>Sin telefono</span>"}<br />${escapeHtml(client.email) || "<span class='muted-cell'>Sin correo</span>"}
+              ${extras.length ? `<br /><span class="client-extras">${extras.join(" · ")}</span>` : ""}
+            </td>
             <td>${escapeHtml(client.notes)}</td>
             <td>
               <div class="inline-actions">
@@ -1394,7 +1412,8 @@ const viewRenderers = {
               </div>
             </td>
           </tr>
-        `
+        `;
+        }
       );
 
     const form = `
@@ -1403,6 +1422,7 @@ const viewRenderers = {
           ${inputField("Nombre", "name", "text", "", "required")}
           ${inputField("Telefono", "phone", "tel", "", "required")}
           ${inputField("Email", "email", "email")}
+          ${inputField("Cumpleaños", "birthday", "date")}
           ${inputField("Ultima visita", "lastVisit", "date", todayISO())}
           ${textareaField("Notas, alergias o preferencias", "notes")}
         </div>
@@ -2555,6 +2575,9 @@ function addClient(data) {
     name: data.name.trim(),
     phone: data.phone.trim(),
     email: data.email.trim(),
+    birthday: (data.birthday || "").trim(),
+    points: Number(data.points || 0),
+    creditBalance: Number(data.creditBalance || 0),
     lastVisit: data.lastVisit || todayISO(),
     notes: data.notes.trim()
   });
@@ -2814,6 +2837,12 @@ function handleSideAction(button) {
   if (button.dataset.sideAction === "manageLocations") {
     if (!requireWrite("inventario")) return;
     openLocationsDrawer();
+    return;
+  }
+
+  if (button.dataset.sideAction === "importClients") {
+    if (!requireWrite("clientes")) return;
+    window.openClientImport?.();
     return;
   }
 
