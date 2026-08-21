@@ -285,6 +285,7 @@ const moduleConfig = {
     description: "Productos, stock minimo, costos y donde esta guardado cada cosa.",
     actions: [
       { label: "Nuevo producto", action: "focusForm" },
+      { label: "Importar inventario", action: "importProducts" },
       { label: "Ubicaciones", action: "manageLocations" },
       { label: "Ver alertas", action: "showAlerts" }
     ]
@@ -294,6 +295,7 @@ const moduleConfig = {
     description: "Define servicios, duracion, precio, producto asociado y cuidados posteriores.",
     actions: [
       { label: "Nuevo procedimiento", action: "focusForm" },
+      { label: "Importar servicios", action: "importProcedures" },
       { label: "Ver en curso", module: "enCurso" }
     ]
   },
@@ -4382,7 +4384,19 @@ function handleSideAction(button) {
 
   if (button.dataset.sideAction === "importClients") {
     if (!requireWrite("clientes")) return;
-    window.openClientImport?.();
+    window.openDataImport?.("clientes");
+    return;
+  }
+
+  if (button.dataset.sideAction === "importProducts") {
+    if (!requireWrite("inventario")) return;
+    window.openDataImport?.("inventario");
+    return;
+  }
+
+  if (button.dataset.sideAction === "importProcedures") {
+    if (!requireWrite("procedimientos")) return;
+    window.openDataImport?.("servicios");
     return;
   }
 
