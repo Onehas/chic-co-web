@@ -197,9 +197,25 @@ function stripped(state, collection) {
   return clone;
 }
 
+// Borra TODOS los registros de la coleccion overlay (todas las sucursales).
+// El overlay nunca borra en el flujo normal (solo agrega/actualiza), asi que
+// esta es la unica via para dejarlo realmente vacio al empezar de cero. Sin
+// esto, vaciar la coleccion en el estado no bastaria: se rehidrataria.
+async function purge(collection) {
+  const db = await pool(collection);
+  if (db) {
+    await db.query(`DELETE FROM ${tableName(collection)}`);
+    return;
+  }
+  await withLock(async () => {
+    await writeFile(collection, {});
+  });
+}
+
 module.exports = {
   hydrate,
   absorb,
   stripped,
-  readAll
+  readAll,
+  purge
 };

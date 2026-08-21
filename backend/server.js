@@ -2473,6 +2473,74 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  // Empezar de cero: borra TODOS los datos operativos (clientes, inventario,
+  // procedimientos, citas, facturas, planes, movimientos, planilla y
+  // solicitudes de reserva) y deja las sucursales vacias. CONSERVA las cuentas
+  // de usuario, la identidad del negocio (branding) y la bitacora. Solo super.
+  if (pathname === "/api/reset" && req.method === "POST") {
+    const currentUser0 = sessionUserFromState(await ensureState(), session);
+    if (!isSuperUser(currentUser0)) {
+      sendError(req, res, 403, "Solo un super usuario puede borrar todos los datos.");
+      return;
+    }
+    // Doble confirmacion explicita: el cuerpo debe traer confirm:"BORRAR".
+    const payload = await readJsonBody(req);
+    if (String(payload.confirm || "") !== "BORRAR") {
+      sendError(req, res, 400, "Confirmacion invalida.");
+      return;
+    }
+
+    try {
+      await withStateLock(async () => {
+        const freshState = await ensureState();
+        const emptyBranches = Object.keys(freshState.branches || {}).reduce((branches, branchId) => {
+          branches[branchId] = emptyBranchData();
+          return branches;
+        }, {});
+        // Si por alguna razon no hubiera sucursales, se recrean las conocidas.
+        if (!Object.keys(emptyBranches).length) {
+          branchIds.forEach((id) => (emptyBranches[id] = emptyBranchData()));
+        }
+        const resetState = {
+          ...emptyBranchData(), // espejo de nivel superior vacio
+          currentBranchId: freshState.currentBranchId || branchIds[0],
+          currentUserId: freshState.currentUserId,
+          users: freshState.users, // se conservan las cuentas
+          branding: freshState.branding, // y la identidad del negocio
+          commissions: [],
+          benefits: [],
+          vacations: [],
+          branches: emptyBranches,
+          auditLog: Array.isArray(freshState.auditLog) ? freshState.auditLog : []
+        };
+        addAuditEntry(resetState, currentUser0, "state.reset", [...branchDataCollections, ...payrollCollections]);
+        // Las tablas overlay nunca borran solas: hay que purgarlas o los datos
+        // rehidratarian el estado que acabamos de vaciar.
+        for (const collection of overlayCollections) {
+          try {
+            await collectionStore.purge(collection);
+          } catch (error) {
+            console.error(`No se pudo purgar ${collection} al empezar de cero:`, error.message);
+          }
+        }
+        await writeState(stampRevision(resetState, freshState));
+      });
+      // Las solicitudes de reserva viven en su propia tabla.
+      try {
+        await bookingStore.purgeAll();
+      } catch (error) {
+        console.error("No se pudieron borrar las solicitudes de reserva:", error.message);
+      }
+    } catch (error) {
+      sendError(req, res, error.statusCode || 500, error.message || "No se pudo borrar los datos.");
+      return;
+    }
+
+    broadcastStateUpdated(session, [...branchDataCollections, ...payrollCollections]);
+    sendJson(req, res, 200, { ok: true });
+    return;
+  }
+
   if (pathname === "/api/audit" && req.method === "GET") {
     const state = await ensureState();
     const user = sessionUserFromState(state, session);

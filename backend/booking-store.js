@@ -410,6 +410,19 @@ async function purgeResolved(days = retentionDays) {
   });
 }
 
+// Borra TODAS las solicitudes de reserva (incluidas las pendientes). Solo se usa
+// al empezar de cero desde el super usuario.
+async function purgeAll() {
+  const db = await pool();
+  if (db) {
+    await db.query("DELETE FROM booking_requests");
+    return;
+  }
+  return withStoreLock(async () => {
+    await writeStore({ requests: [] });
+  });
+}
+
 module.exports = {
   retentionDays,
   normalizeEmail,
@@ -424,5 +437,6 @@ module.exports = {
   getRequest,
   resolveRequest,
   requestsBetween,
-  purgeResolved
+  purgeResolved,
+  purgeAll
 };

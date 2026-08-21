@@ -1919,6 +1919,16 @@ th.num {
   justify-content: flex-end;
 }
 
+/* Boton peligroso (Empezar de cero): borra datos, se marca en rojo. */
+.secondary-action.is-danger {
+  color: #fff;
+  background: var(--crit, #c0392b);
+  border-color: var(--crit, #c0392b);
+}
+.secondary-action.is-danger:hover {
+  filter: brightness(0.94);
+}
+
 
 /* ---------------------------------------------------------------------
    Herramientas de administración
