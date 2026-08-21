@@ -124,9 +124,13 @@ async function pool() {
         handled_by text NOT NULL DEFAULT '',
         handled_at timestamptz,
         source_ip text NOT NULL DEFAULT '',
+        specialist text NOT NULL DEFAULT '',
         created_at timestamptz NOT NULL DEFAULT now()
       )
     `);
+    // Tablas creadas antes de que existiera la eleccion de especialista: se
+    // agrega la columna sin tocar los datos. IF NOT EXISTS la hace idempotente.
+    await pgPool.query("ALTER TABLE booking_requests ADD COLUMN IF NOT EXISTS specialist text NOT NULL DEFAULT ''");
     await pgPool.query(
       "CREATE INDEX IF NOT EXISTS booking_requests_pending_idx ON booking_requests (branch_id, status, requested_date)"
     );
@@ -186,6 +190,7 @@ function rowToRequest(row) {
     clientEmail: row.client_email,
     clientPhone: row.client_phone,
     notes: row.notes,
+    specialist: row.specialist || "",
     status: row.status,
     appointmentId: row.appointment_id,
     handledBy: row.handled_by,
@@ -211,6 +216,7 @@ async function createRequest(input = {}) {
     clientEmail: normalizeEmail(input.clientEmail),
     clientPhone: normalizePhone(input.clientPhone),
     notes: normalizeNotes(input.notes),
+    specialist: String(input.specialist || "").slice(0, 120),
     status: "pending",
     appointmentId: "",
     handledBy: "",
@@ -224,12 +230,12 @@ async function createRequest(input = {}) {
     await db.query(
       `INSERT INTO booking_requests
          (id, branch_id, procedure_id, procedure_name, requested_date, requested_time,
-          duration, client_name, client_email, client_phone, notes, status, source_ip)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+          duration, client_name, client_email, client_phone, notes, status, source_ip, specialist)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
       [
         record.id, record.branchId, record.procedureId, record.procedureName,
         record.date, record.time, record.duration, record.clientName,
-        record.clientEmail, record.clientPhone, record.notes, record.status, record.sourceIp
+        record.clientEmail, record.clientPhone, record.notes, record.status, record.sourceIp, record.specialist
       ]
     );
     return record;

@@ -110,6 +110,56 @@ const withPending = booking.availableSlots(
 );
 assert.ok(!withPending.slots.includes("12:00"), "las solicitudes pendientes apartan el horario");
 
+/* --- Disponibilidad por especialista ------------------------------------ */
+
+// La sucursal expone su lista de especialistas.
+assert.deepEqual(booking.specialistsForBranch(baseState, "rohrmoser"), ["A", "B"], "lista de especialistas de la sede");
+assert.ok(booking.isKnownSpecialist(baseState, "rohrmoser", "A"), "A si atiende aqui");
+assert.ok(booking.isKnownSpecialist(baseState, "rohrmoser", ""), "sin preferencia siempre vale");
+assert.ok(!booking.isKnownSpecialist(baseState, "rohrmoser", "Z"), "Z no atiende aqui");
+
+// A tiene una cita a las 10:00; B esta libre.
+const specState = structuredClone(baseState);
+specState.branches.rohrmoser.appointments = [
+  { date: "2026-08-21", time: "10:00", duration: 60, status: "Confirmada", specialist: "A" }
+];
+
+// Pidiendo a A, su hora de las 10:00 esta ocupada (capacidad 1 por persona).
+const withA = booking.availableSlots(specState, "rohrmoser", "2026-08-21", 60, [], now, "A");
+assert.ok(!withA.slots.includes("10:00"), "A no puede a las 10:00 (ya tiene cita)");
+assert.ok(withA.slots.includes("11:00"), "A si a las 11:00");
+
+// Pidiendo a B, las 10:00 estan libres: la cita de A no le afecta.
+const withB = booking.availableSlots(specState, "rohrmoser", "2026-08-21", 60, [], now, "B");
+assert.ok(withB.slots.includes("10:00"), "B si puede a las 10:00 (la cita de A no le afecta)");
+
+// Sin preferencia, con capacidad 2 y solo una cita, las 10:00 siguen libres.
+const withAny = booking.availableSlots(specState, "rohrmoser", "2026-08-21", 60, [], now, "");
+assert.ok(withAny.slots.includes("10:00"), "sin preferencia hay cupo (capacidad 2, 1 ocupada)");
+
+// Una solicitud pendiente para A tambien bloquea a A, pero no a B.
+const pendA = [{ branchId: "rohrmoser", date: "2026-08-21", time: "14:00", duration: 60, specialist: "A" }];
+assert.ok(!booking.availableSlots(specState, "rohrmoser", "2026-08-21", 60, pendA, now, "A").slots.includes("14:00"), "una solicitud pendiente aparta a A");
+assert.ok(booking.availableSlots(specState, "rohrmoser", "2026-08-21", 60, pendA, now, "B").slots.includes("14:00"), "pero no a B");
+
+// validateSlot tambien respeta al especialista.
+assert.match(
+  booking.validateSlot(specState, "rohrmoser", "2026-08-21", "10:00", 60, [], now, "A"),
+  /especialista se acaba de ocupar/,
+  "no deja guardar con A a una hora que ya tiene ocupada"
+);
+assert.equal(booking.validateSlot(specState, "rohrmoser", "2026-08-21", "10:00", 60, [], now, "B"), "", "con B esa hora si pasa");
+
+// El almacen guarda y devuelve la especialista pedida.
+const withSpecialist = await store.createRequest({
+  branchId: "rohrmoser", procedureId: "SRV-1", procedureName: "Limpieza facial",
+  date: "2026-08-22", time: "09:00", duration: 60, clientName: "Ana Lopez",
+  clientEmail: "ana@example.com", clientPhone: "8888 2222", specialist: "A"
+});
+assert.equal(withSpecialist.specialist, "A", "la solicitud guarda la especialista elegida");
+const fetched = await store.getRequest(withSpecialist.id);
+assert.equal(fetched.specialist, "A", "y la devuelve al leerla");
+
 /* --- Ultima validacion antes de guardar --------------------------------- */
 
 assert.equal(booking.validateSlot(baseState, "rohrmoser", "2026-08-21", "10:00", 60, [], now), "", "un hueco libre pasa");

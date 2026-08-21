@@ -71,8 +71,15 @@
 
     const cards = requests
       .map((request) => {
+        // La clienta pudo pedir una especialista al reservar. Se preselecciona
+        // en el desplegable para que recepcion confirme con esa persona por
+        // defecto (puede cambiarla si no esta disponible).
+        const requested = String(request.specialist || "").trim();
         const options = specialists
-          .map((specialist) => `<option value="${escapeHtml(specialist.name)}">${escapeHtml(specialist.name)}</option>`)
+          .map((specialist) => {
+            const selected = requested && specialist.name.toLowerCase() === requested.toLowerCase();
+            return `<option value="${escapeHtml(specialist.name)}"${selected ? " selected" : ""}>${escapeHtml(specialist.name)}</option>`;
+          })
           .join("");
 
         return `
@@ -81,6 +88,7 @@
               <div class="request-who">
                 <strong>${escapeHtml(request.clientName)}</strong>
                 <span>${escapeHtml(request.procedureName)}</span>
+                ${requested ? `<span class="request-pref">Pidió: ${escapeHtml(requested)}</span>` : ""}
               </div>
               <div class="request-when">
                 <strong>${escapeHtml(longDate(request.date))}</strong>
@@ -357,6 +365,17 @@
       background: var(--surface-2);
       border-radius: var(--radius-sm);
       font-size: 12.5px;
+    }
+
+    .request-pref {
+      display: inline-block;
+      margin-top: 2px;
+      padding: 1px 8px;
+      color: var(--accent, #b06a8f);
+      background: var(--accent-soft, rgba(176,106,143,.12));
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
     }
 
     .request-actions {

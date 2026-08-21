@@ -150,6 +150,12 @@
           <span class="import-drop-hint">Columnas: nombre, telefono, correo, cumpleaños, puntos, saldo, notas</span>
         </label>
 
+        <p class="import-template-row">
+          ¿No tienes el archivo listo?
+          <button type="button" class="import-template-link" data-import-template>Descargar plantilla</button>
+          <span class="import-template-hint">Abrela en Excel, pega tus clientes y guardala como CSV.</span>
+        </p>
+
         <div class="import-preview" data-import-preview hidden></div>
         <p class="import-error" role="alert" aria-live="polite" data-import-error></p>
 
@@ -164,6 +170,10 @@
     modal.addEventListener("click", (event) => {
       if (event.target === modal || event.target.closest("[data-import-cancel]")) close();
       if (event.target.closest("[data-import-go]")) runImport();
+      if (event.target.closest("[data-import-template]")) {
+        event.preventDefault();
+        downloadTemplate();
+      }
     });
     const fileInput = modal.querySelector("[data-import-file]");
     fileInput.addEventListener("change", () => {
@@ -284,6 +294,29 @@
     close();
   }
 
+  // Plantilla lista para llenar: los mismos encabezados que el importador
+  // entiende, con dos filas de ejemplo para que se vea el formato (fecha de
+  // cumpleaños y saldo). Se descarga con BOM para que Excel respete los acentos.
+  function downloadTemplate() {
+    const headers = ["nombre", "telefono", "correo", "cumpleaños", "puntos", "saldo", "notas"];
+    const examples = [
+      ["Maria Perez", "88887777", "maria@correo.com", "1990-06-18", "120", "5000", "Clienta frecuente"],
+      ["Ana Rodriguez", "70001234", "", "", "0", "0", ""]
+    ];
+    const quote = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
+    const csv = [headers, ...examples].map((row) => row.map(quote).join(",")).join("\r\n");
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "plantilla-clientes-chic-co.csv";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    if (typeof showToast === "function") showToast("Plantilla descargada. Llenala y vuelve a importarla.");
+  }
+
   function open() {
     build();
     parsed = { records: [], columns: [] };
@@ -340,6 +373,10 @@
     .import-stat { border: 1px solid var(--line); border-radius: 10px; padding: 9px; text-align: center; }
     .import-stat strong { display: block; font-size: 18px; }
     .import-stat span { font-size: 10.5px; color: var(--ink-3); }
+    .import-template-row { margin: 0; font-size: 12px; color: var(--ink-3); display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+    .import-template-link { border: none; background: none; padding: 0; color: var(--accent); font-weight: 600; font-size: 12px; cursor: pointer; text-decoration: underline; }
+    .import-template-link:hover { opacity: .8; }
+    .import-template-hint { flex-basis: 100%; color: var(--ink-3); font-size: 11px; }
     .import-target { margin: 10px 0 0; font-size: 12.5px; color: var(--ink-2); }
     .import-empty { margin: 0; font-size: 12.5px; color: var(--ink-3); }
     .import-error { margin: 0; color: var(--crit); font-size: 12.5px; min-height: 1em; }

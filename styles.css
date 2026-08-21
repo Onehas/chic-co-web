@@ -2524,3 +2524,30 @@ th.num {
 .dash-export:hover { border-color: var(--ink-3); background: var(--surface-2); }
 .dash-export:active { transform: scale(0.97); }
 @media (prefers-reduced-motion: reduce) { .dash-export:active { transform: none; } }
+
+/* Filtro de sucursal en Facturas pagadas */
+.dash-branch { margin: 0; }
+.dash-branch select {
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--ink);
+  padding: 7px 12px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+/* El detalle de facturas pagadas ocupa todo el ancho, bajo la rejilla. */
+.dash-panel-wide { margin-top: 16px; }
+
+/* Planilla / RRHH */
+.payroll-sub { margin: -4px 0 12px; color: var(--ink-3); font-size: 12.5px; }
+.payroll-form { margin-bottom: 16px; }
+.payroll-form .form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.payroll-panel .dash-table th:last-child,
+.payroll-panel .dash-table td:last-child { text-align: right; }

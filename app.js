@@ -99,6 +99,14 @@ const branchOptions = [
   { id: "alajuela", label: "Chic & Co Alajuela" }
 ];
 
+// Sucursales validas para atar una cuenta. "all" = todas las sedes. Se declara
+// junto a branchOptions porque normalizeUser lo usa al construir el estado
+// inicial, antes de que corra el resto del archivo.
+const branchScopeValues = ["all", ...branchOptions.map((branch) => branch.id)];
+
+// Colecciones de planilla / RRHH en el nivel superior del estado.
+const payrollKeys = ["commissions", "benefits", "vacations"];
+
 const procedureSpecialists = [
   { name: "Andrea Morales", focus: "Faciales" },
   { name: "Paola Jimenez", focus: "Color" },
@@ -159,6 +167,11 @@ const defaultState = {
   ...emptyBranchData(),
   currentBranchId: "rohrmoser",
   currentUserId: "USR-000",
+  // Planilla / RRHH (datos de todo el negocio, no de una sucursal). Solo los ve
+  // y edita quien el super usuario designe con payrollAccess.
+  commissions: [],
+  benefits: [],
+  vacations: [],
   users: [
     superUserAccount,
     {
@@ -213,6 +226,16 @@ const moduleConfig = {
   integraciones: {
     title: "Integraciones",
     description: "Conecta las aplicaciones que usa el negocio: facturacion, marketing y correo.",
+    actions: []
+  },
+  pagos: {
+    title: "Facturas pagadas",
+    description: "Control de gerencia sobre las facturas cobradas por completo, con totales y export.",
+    actions: []
+  },
+  planilla: {
+    title: "Planilla y RRHH",
+    description: "Comisiones, beneficios y vacaciones del personal. Acceso restringido por el super usuario.",
     actions: []
   },
   clientes: {
@@ -393,6 +416,12 @@ function normalizeStateSnapshot(snapshot) {
     if (!Array.isArray(merged[key])) merged[key] = [];
   });
 
+  // Colecciones de planilla: siempre arrays. Para quien no tiene acceso a RRHH
+  // el servidor no las envia, asi que quedan vacias (no las vera de todos modos).
+  payrollKeys.forEach((key) => {
+    if (!Array.isArray(merged[key])) merged[key] = [];
+  });
+
   const fallbackBranches = defaultBranches();
   const savedBranches = parsed.branches || {};
   const legacyRohrmoserData = pickBranchData(merged);
@@ -444,9 +473,23 @@ function normalizeUser(user) {
   const role = rolePresets[user.role] ? user.role : "recepcion";
   const basePermissions = clone(rolePresets[role].permissions);
   const savedPermissions = user.permissions || {};
+  // Super y admin siempre ven todas las sucursales; el resto conserva la sede
+  // que se le asigno, o "all" si nunca se le asigno una (compatibilidad).
+  const savedScope = typeof user.branchScope === "string" ? user.branchScope.trim() : "";
+  const branchScope =
+    role === "super" || role === "admin"
+      ? "all"
+      : branchScopeValues.includes(savedScope) && savedScope
+        ? savedScope
+        : "all";
+  // Acceso a planilla/RRHH. El super siempre lo tiene; el resto solo si el
+  // super se lo asigno. Se guarda como booleano explicito.
+  const payrollAccess = role === "super" ? true : user.payrollAccess === true;
   return {
     ...user,
     role,
+    branchScope,
+    payrollAccess,
     active: user.active !== false,
     passwordHash: user.passwordHash || fallbackPasswordHash,
     permissions: permissionModules.reduce((permissions, moduleName) => {
@@ -514,6 +557,13 @@ function syncCurrentBranchData() {
 function switchBranch(branchId) {
   const nextBranch = branchOptions.find((branch) => branch.id === branchId);
   if (!nextBranch) return;
+  // Blindaje en cliente: una cuenta atada no puede cambiar a una sede que no le
+  // toca. El servidor ya no le envia esos datos, pero esto evita hasta el
+  // intento y un estado local inconsistente.
+  if (!canAccessBranch(branchId)) {
+    showToast("Su cuenta solo tiene acceso a su sucursal.");
+    return;
+  }
   if (state.currentBranchId === branchId) {
     closeDropdown();
     showToast(`Sucursal activa: ${nextBranch.label}`);
@@ -780,18 +830,66 @@ function isAdminRole(user = currentUser()) {
   return Boolean(user?.active && (user.role === "super" || user.role === "admin"));
 }
 
+// Sucursal a la que esta atada una cuenta. Super y admin ven todas; el resto
+// queda en la sede que el super le asigno (`branchScope`). Sin asignacion se
+// asume "all" para no romper cuentas viejas. Espeja la logica del servidor:
+// aqui es solo para no mostrar lo que el servidor de todos modos no envia.
+function userBranchScope(user = currentUser()) {
+  if (isAdminRole(user)) return "all";
+  const scope = typeof user?.branchScope === "string" ? user.branchScope.trim() : "";
+  return scope || "all";
+}
+
+function allowedBranchOptions(user = currentUser()) {
+  const scope = userBranchScope(user);
+  if (scope === "all") return branchOptions;
+  return branchOptions.filter((branch) => branch.id === scope);
+}
+
+function canAccessBranch(branchId, user = currentUser()) {
+  const scope = userBranchScope(user);
+  return scope === "all" || scope === branchId;
+}
+
+function branchScopeLabel(scope) {
+  if (!scope || scope === "all") return "Todas las sucursales";
+  return branchOptions.find((branch) => branch.id === scope)?.label || scope;
+}
+
+function branchScopeOptions(selected = "all") {
+  return [
+    { value: "all", label: "Todas las sucursales", selected: selected === "all" },
+    ...branchOptions.map((branch) => ({
+      value: branch.id,
+      label: branch.label,
+      selected: branch.id === selected
+    }))
+  ];
+}
+
 // Modulos de direccion, solo para administradores; no pasan por la matriz de
 // permisos por modulo.
-const adminOnlyModules = new Set(["dashboard", "integraciones"]);
+const adminOnlyModules = new Set(["dashboard", "integraciones", "pagos"]);
+
+// Acceso a planilla/RRHH: el super siempre, y cualquier cuenta a la que el super
+// le asigno payrollAccess. NO basta con ser admin: es un acceso designado.
+function hasPayrollAccess(user = currentUser()) {
+  return Boolean(user?.active && (user.role === "super" || user.payrollAccess === true));
+}
+
+// Modulo de planilla: acceso designado, no por rol ni por la matriz de permisos.
+const payrollModules = new Set(["planilla"]);
 
 function canView(moduleName) {
   const user = currentUser();
+  if (payrollModules.has(moduleName)) return hasPayrollAccess(user);
   if (adminOnlyModules.has(moduleName)) return isAdminRole(user);
   return Boolean(user?.active && user.permissions?.[moduleName]?.read);
 }
 
 function canWrite(moduleName) {
   const user = currentUser();
+  if (payrollModules.has(moduleName)) return hasPayrollAccess(user);
   return Boolean(user?.active && user.permissions?.[moduleName]?.write);
 }
 
@@ -933,7 +1031,22 @@ function setModule(moduleName, options = {}) {
   }
 }
 
+// Si la sucursal activa quedo fuera del alcance del usuario (por ejemplo una
+// cuenta que antes veia todas y el super acaba de atar a una sede), se corrige
+// antes de dibujar: nunca se muestran datos de una sucursal que no le toca.
+function enforceBranchScope() {
+  if (canAccessBranch(state.currentBranchId)) return;
+  const target = allowedBranchOptions()[0];
+  if (!target) return;
+  syncCurrentBranchData();
+  state.currentBranchId = target.id;
+  state.branches = state.branches || defaultBranches();
+  state.branches[target.id] = normalizeBranchData(state.branches[target.id], defaultBranches()[target.id]);
+  writeBranchData(state, state.branches[target.id]);
+}
+
 function renderAll() {
+  enforceBranchScope();
   renderActiveUser();
   renderModuleAccess();
   renderSummary();
@@ -1227,12 +1340,58 @@ function statusBadge(status) {
    ===================================================================== */
 
 let dashboardPeriod = "mes";
+// Control de facturas pagadas (gerencia): periodo y sucursal filtrada.
+let pagosPeriod = "mes";
+let pagosBranch = "all";
 
 const dashboardPeriods = [
   { id: "hoy", label: "Hoy" },
   { id: "mes", label: "Este mes" },
   { id: "todo", label: "Todo" }
 ];
+
+// Una factura esta "pagada" cuando lo cobrado cubre el total (con IVA). Un abono
+// parcial no cuenta como pagada.
+function isInvoicePaid(invoice) {
+  return Number(invoice.paid || 0) >= invoiceTotal(invoice) && invoiceTotal(invoice) > 0;
+}
+
+// Filas de facturas PAGADAS del periodo y sucursal elegidos, mas recientes
+// primero. Solo la gerencia (admin/super) llega aqui, asi que ve todas las sedes.
+function paidInvoiceRows(period = pagosPeriod, branchFilter = pagosBranch) {
+  return allInvoicesAcrossBranches()
+    .filter((row) => isInvoicePaid(row.invoice))
+    .filter((row) => invoiceInPeriod(row.invoice, period))
+    .filter((row) => branchFilter === "all" || row.branchId === branchFilter)
+    .sort((a, b) => String(b.invoice.date || "").localeCompare(String(a.invoice.date || "")));
+}
+
+function exportPaidInvoices() {
+  const rows = paidInvoiceRows();
+  const quote = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
+  const header = ["Factura", "Fecha", "Sucursal", "Cliente", "Servicio", "Producto", "Colaborador", "Total", "IVA", "Metodo"];
+  const lines = [header.map(quote).join(",")];
+  rows.forEach((row) => {
+    lines.push(
+      [
+        row.invoice.id,
+        row.invoice.date,
+        row.branchName,
+        row.clientName,
+        row.procedureName,
+        row.productName || "",
+        row.collaborator,
+        invoiceTotal(row.invoice),
+        invoiceIva(row.invoice),
+        paymentMethodLabel(row.invoice.paymentMethod)
+      ]
+        .map(quote)
+        .join(",")
+    );
+  });
+  downloadFile(`chic-co-facturas-pagadas-${pagosPeriod}-${todayISO()}.csv`, "﻿" + lines.join("\n"), "text/csv;charset=utf-8");
+  showToast("Facturas pagadas exportadas");
+}
 
 function branchLabel(branchId) {
   return branchOptions.find((branch) => branch.id === branchId)?.label || branchId;
@@ -1396,6 +1555,105 @@ function dashboardBreakdownTable(title, groups, extraLabel) {
     </section>`;
 }
 
+/* =====================================================================
+   Planilla / RRHH
+   ---------------------------------------------------------------------
+   Comisiones, beneficios usados y vacaciones del personal. Datos de todo
+   el negocio (no de una sucursal). Solo los ve y edita quien el super
+   usuario designe con payrollAccess; el servidor ni siquiera los envia a
+   los demas.
+   ===================================================================== */
+
+function currentMonthISO() {
+  return todayISO().slice(0, 7);
+}
+
+// Nombres del personal para asignar comisiones/beneficios/vacaciones: cuentas
+// activas del sistema mas la lista de especialistas, sin repetir.
+function staffNames() {
+  const fromUsers = (state.users || []).filter((user) => user.active).map((user) => user.name);
+  const fromSpecialists = procedureSpecialists.map((specialist) => specialist.name);
+  return [...new Set([...fromUsers, ...fromSpecialists].map((name) => String(name).trim()).filter(Boolean))].sort();
+}
+
+function staffOptions(selected = "") {
+  return staffNames().map((name) => ({ value: name, label: name, selected: name === selected }));
+}
+
+function payrollCommission(record) {
+  return Math.round((Number(record.sales) || 0) * (Number(record.rate) || 0) / 100);
+}
+
+function payrollTotal(record) {
+  return (Number(record.baseSalary) || 0) + payrollCommission(record);
+}
+
+function vacationDays(fromISO, toISO) {
+  const from = Date.parse(`${fromISO}T00:00:00Z`);
+  const to = Date.parse(`${toISO}T00:00:00Z`);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) return 0;
+  return Math.round((to - from) / (24 * 60 * 60 * 1000)) + 1;
+}
+
+function addCommission(data) {
+  const worker = (data.worker || "").trim();
+  if (!worker) return showToast("Elige a la persona");
+  state.commissions.unshift({
+    id: nextId("COM", state.commissions),
+    worker,
+    period: (data.period || currentMonthISO()).trim(),
+    baseSalary: Number(data.baseSalary || 0),
+    sales: Number(data.sales || 0),
+    rate: Number(data.rate || 0),
+    status: data.status || "Pendiente",
+    notes: (data.notes || "").trim()
+  });
+  persistAndRender("Comision registrada");
+}
+
+function addBenefit(data) {
+  const worker = (data.worker || "").trim();
+  if (!worker) return showToast("Elige a la persona");
+  state.benefits.unshift({
+    id: nextId("BEN", state.benefits),
+    worker,
+    type: (data.type || "Beneficio").trim(),
+    amount: Number(data.amount || 0),
+    date: (data.date || todayISO()).trim(),
+    notes: (data.notes || "").trim()
+  });
+  persistAndRender("Beneficio registrado");
+}
+
+function addVacation(data) {
+  const worker = (data.worker || "").trim();
+  if (!worker) return showToast("Elige a la persona");
+  const from = (data.from || todayISO()).trim();
+  const to = (data.to || from).trim();
+  if (vacationDays(from, to) <= 0) return showToast("Revisa las fechas de las vacaciones");
+  state.vacations.unshift({
+    id: nextId("VAC", state.vacations),
+    worker,
+    from,
+    to,
+    status: data.status || "Solicitada",
+    notes: (data.notes || "").trim()
+  });
+  persistAndRender("Vacaciones registradas");
+}
+
+const payrollCollectionByKind = { commission: "commissions", benefit: "benefits", vacation: "vacations" };
+
+function removePayrollRecord(kind, id) {
+  const collection = payrollCollectionByKind[kind];
+  if (!collection || !Array.isArray(state[collection])) return;
+  const record = state[collection].find((item) => item.id === id);
+  if (!record) return;
+  if (!confirm("¿Eliminar este registro de planilla?")) return;
+  state[collection] = state[collection].filter((item) => item.id !== id);
+  persistAndRender("Registro eliminado");
+}
+
 const viewRenderers = {
   dashboard() {
     const period = dashboardPeriod;
@@ -1452,6 +1710,265 @@ const viewRenderers = {
           ${dashboardBreakdownTable("Por servicio", byService, "Servicio")}
           ${dashboardBreakdownTable("Por producto", byProduct, "Producto")}
         </div>
+      </section>
+    `;
+  },
+
+  pagos() {
+    const period = pagosPeriod;
+    const rows = paidInvoiceRows(period, pagosBranch);
+    const totalCobrado = rows.reduce((sum, row) => sum + invoiceTotal(row.invoice), 0);
+    const totalIva = rows.reduce((sum, row) => sum + invoiceIva(row.invoice), 0);
+
+    const periodTabs = dashboardPeriods
+      .map(
+        (item) =>
+          `<button type="button" class="dash-tab${item.id === period ? " is-active" : ""}" data-pagos-period="${item.id}">${escapeHtml(item.label)}</button>`
+      )
+      .join("");
+
+    const branchFilter = [{ id: "all", label: "Todas las sucursales" }, ...branchOptions]
+      .map((branch) => `<option value="${escapeHtml(branch.id)}"${branch.id === pagosBranch ? " selected" : ""}>${escapeHtml(branch.label)}</option>`)
+      .join("");
+
+    const kpis = [
+      ["Facturas pagadas", String(rows.length)],
+      ["Total cobrado", money(totalCobrado)],
+      ["IVA incluido", money(totalIva)]
+    ]
+      .map(
+        ([label, value]) => `
+          <div class="dash-kpi">
+            <span class="dash-kpi-value">${escapeHtml(value)}</span>
+            <span class="dash-kpi-label">${escapeHtml(label)}</span>
+          </div>`
+      )
+      .join("");
+
+    const byMethod = groupInvoiceRows(rows, (row) => paymentMethodLabel(row.invoice.paymentMethod));
+    const byBranch = groupInvoiceRows(rows, (row) => row.branchName);
+
+    const tableRows = rows.length
+      ? rows
+          .map(
+            (row) => `
+        <tr>
+          <td>
+            <div class="cell-title">
+              <strong>${escapeHtml(row.invoice.id)}</strong>
+              <span>${escapeHtml(row.invoice.date || "Sin fecha")} · ${escapeHtml(row.branchName)}</span>
+            </div>
+          </td>
+          <td>${escapeHtml(row.clientName)}</td>
+          <td>${escapeHtml(row.procedureName)}${row.productName ? `<br /><span class="muted-cell">${escapeHtml(row.productName)}</span>` : ""}</td>
+          <td>${escapeHtml(row.collaborator)}</td>
+          <td class="dash-num">${money(invoiceTotal(row.invoice))}<br /><span class="dash-muted">IVA ${money(invoiceIva(row.invoice))}</span></td>
+          <td>${escapeHtml(paymentMethodLabel(row.invoice.paymentMethod))}</td>
+        </tr>`
+          )
+          .join("")
+      : `<tr><td colspan="6"><p class="dash-empty">No hay facturas pagadas en este periodo.</p></td></tr>`;
+
+    return `
+      <section class="dash">
+        <div class="dash-head">
+          <div>
+            <h2>Facturas pagadas</h2>
+            <p>Control de gerencia: facturas cobradas por completo, todas las sucursales.</p>
+          </div>
+          <div class="dash-controls">
+            <div class="dash-tabs" role="group" aria-label="Periodo">${periodTabs}</div>
+            <label class="field dash-branch"><span class="visually-hidden">Sucursal</span>
+              <select data-pagos-branch>${branchFilter}</select>
+            </label>
+            <button type="button" class="dash-export" data-pagos-export>Exportar CSV</button>
+          </div>
+        </div>
+        <div class="dash-kpis">${kpis}</div>
+        <div class="dash-grid">
+          ${dashboardBreakdownTable("Por metodo de pago", byMethod, "Metodo")}
+          ${dashboardBreakdownTable("Por sucursal", byBranch, "Sucursal")}
+        </div>
+        <section class="dash-panel dash-panel-wide">
+          <h3>Detalle de facturas pagadas</h3>
+          <div class="table-wrap">
+            <table class="dash-table">
+              <thead>
+                <tr><th>Factura</th><th>Cliente</th><th>Servicio</th><th>Colaborador</th><th class="dash-num">Total</th><th>Metodo</th></tr>
+              </thead>
+              <tbody>${tableRows}</tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+    `;
+  },
+
+  planilla() {
+    const month = currentMonthISO();
+    const commissions = state.commissions || [];
+    const benefits = state.benefits || [];
+    const vacations = state.vacations || [];
+
+    const monthCommissions = commissions.filter((item) => String(item.period || "").slice(0, 7) === month);
+    const totalComisiones = monthCommissions.reduce((sum, item) => sum + payrollTotal(item), 0);
+    const monthBenefits = benefits.filter((item) => String(item.date || "").slice(0, 7) === month);
+    const totalBeneficios = monthBenefits.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+    const vacacionesPendientes = vacations.filter((item) => item.status !== "Tomada").length;
+
+    const kpis = [
+      ["Planilla del mes", money(totalComisiones)],
+      ["Beneficios del mes", money(totalBeneficios)],
+      ["Vacaciones activas", String(vacacionesPendientes)],
+      ["Personal en planilla", String(new Set(commissions.map((item) => item.worker)).size)]
+    ]
+      .map(
+        ([label, value]) => `
+          <div class="dash-kpi">
+            <span class="dash-kpi-value">${escapeHtml(value)}</span>
+            <span class="dash-kpi-label">${escapeHtml(label)}</span>
+          </div>`
+      )
+      .join("");
+
+    const delBtn = (kind, id) => `<button class="row-action is-warning" type="button" data-payroll-del="${kind}:${escapeHtml(id)}">Eliminar</button>`;
+    const statusOptions = (list, selected) => list.map((value) => ({ value, label: value, selected: value === selected }));
+
+    /* --- Comisiones --- */
+    const commissionRows = commissions.length
+      ? commissions
+          .map(
+            (item) => `
+        <tr>
+          <td><strong>${escapeHtml(item.worker)}</strong></td>
+          <td>${escapeHtml(item.period)}</td>
+          <td class="dash-num">${money(item.baseSalary)}</td>
+          <td class="dash-num">${money(item.sales)}</td>
+          <td class="dash-num">${escapeHtml(item.rate)}%</td>
+          <td class="dash-num">${money(payrollCommission(item))}</td>
+          <td class="dash-num"><strong>${money(payrollTotal(item))}</strong></td>
+          <td>${statusBadge(item.status)}</td>
+          <td>${delBtn("commission", item.id)}</td>
+        </tr>`
+          )
+          .join("")
+      : `<tr><td colspan="9"><p class="dash-empty">Aun no hay comisiones registradas.</p></td></tr>`;
+
+    const commissionForm = `
+      <form class="data-form payroll-form" data-form="commission" autocomplete="off">
+        <div class="form-grid">
+          ${selectField("Persona", "worker", staffOptions(), "", "required")}
+          ${inputField("Periodo", "period", "month", month, "required")}
+          ${inputField("Salario base", "baseSalary", "number", "0", "min='0' step='100'")}
+          ${inputField("Ventas del periodo", "sales", "number", "0", "min='0' step='100'")}
+          ${inputField("Comision %", "rate", "number", "0", "min='0' step='0.5'")}
+          ${selectField("Estado", "status", statusOptions(["Pendiente", "Pagada"], "Pendiente"), "Pendiente")}
+        </div>
+        <button class="primary-action" type="submit">Registrar comision</button>
+      </form>`;
+
+    /* --- Beneficios --- */
+    const benefitRows = benefits.length
+      ? benefits
+          .map(
+            (item) => `
+        <tr>
+          <td><strong>${escapeHtml(item.worker)}</strong></td>
+          <td>${escapeHtml(item.type)}</td>
+          <td class="dash-num">${money(item.amount)}</td>
+          <td>${escapeHtml(item.date)}</td>
+          <td>${escapeHtml(item.notes || "")}</td>
+          <td>${delBtn("benefit", item.id)}</td>
+        </tr>`
+          )
+          .join("")
+      : `<tr><td colspan="6"><p class="dash-empty">Aun no hay beneficios registrados.</p></td></tr>`;
+
+    const benefitForm = `
+      <form class="data-form payroll-form" data-form="benefit" autocomplete="off">
+        <div class="form-grid">
+          ${selectField("Persona", "worker", staffOptions(), "", "required")}
+          ${selectField("Tipo", "type", statusOptions(["Aguinaldo", "Bono", "Seguro", "Capacitacion", "Adelanto", "Otro"], "Bono"), "Bono")}
+          ${inputField("Monto", "amount", "number", "0", "min='0' step='100'")}
+          ${inputField("Fecha", "date", "date", todayISO(), "required")}
+          ${inputField("Nota", "notes", "text", "")}
+        </div>
+        <button class="primary-action" type="submit">Registrar beneficio</button>
+      </form>`;
+
+    /* --- Vacaciones --- */
+    const vacationRows = vacations.length
+      ? vacations
+          .map(
+            (item) => `
+        <tr>
+          <td><strong>${escapeHtml(item.worker)}</strong></td>
+          <td>${escapeHtml(item.from)}</td>
+          <td>${escapeHtml(item.to)}</td>
+          <td class="dash-num">${vacationDays(item.from, item.to)}</td>
+          <td>${statusBadge(item.status)}</td>
+          <td>${escapeHtml(item.notes || "")}</td>
+          <td>${delBtn("vacation", item.id)}</td>
+        </tr>`
+          )
+          .join("")
+      : `<tr><td colspan="7"><p class="dash-empty">Aun no hay vacaciones registradas.</p></td></tr>`;
+
+    const vacationForm = `
+      <form class="data-form payroll-form" data-form="vacation" autocomplete="off">
+        <div class="form-grid">
+          ${selectField("Persona", "worker", staffOptions(), "", "required")}
+          ${inputField("Desde", "from", "date", todayISO(), "required")}
+          ${inputField("Hasta", "to", "date", todayISO(), "required")}
+          ${selectField("Estado", "status", statusOptions(["Solicitada", "Aprobada", "Tomada"], "Solicitada"), "Solicitada")}
+          ${inputField("Nota", "notes", "text", "")}
+        </div>
+        <button class="primary-action" type="submit">Registrar vacaciones</button>
+      </form>`;
+
+    const panel = (title, subtitle, form, headers, rows) => `
+      <section class="dash-panel dash-panel-wide payroll-panel">
+        <h3>${escapeHtml(title)}</h3>
+        <p class="payroll-sub">${escapeHtml(subtitle)}</p>
+        ${canWrite("planilla") ? form : ""}
+        <div class="table-wrap">
+          <table class="dash-table">
+            <thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </section>`;
+
+    return `
+      <section class="dash">
+        <div class="dash-head">
+          <div>
+            <h2>Planilla y RRHH</h2>
+            <p>Comisiones, beneficios y vacaciones del personal. Acceso restringido por el super usuario.</p>
+          </div>
+        </div>
+        <div class="dash-kpis">${kpis}</div>
+        ${panel(
+          "Comisiones",
+          "Salario base + comision sobre ventas por periodo.",
+          commissionForm,
+          ["Persona", "Periodo", "Base", "Ventas", "%", "Comision", "Total", "Estado", ""],
+          commissionRows
+        )}
+        ${panel(
+          "Beneficios utilizados",
+          "Aguinaldo, bonos, seguros, capacitaciones y adelantos.",
+          benefitForm,
+          ["Persona", "Tipo", "Monto", "Fecha", "Nota", ""],
+          benefitRows
+        )}
+        ${panel(
+          "Vacaciones",
+          "Control de dias solicitados, aprobados y tomados.",
+          vacationForm,
+          ["Persona", "Desde", "Hasta", "Dias", "Estado", "Nota", ""],
+          vacationRows
+        )}
       </section>
     `;
   },
@@ -2021,7 +2538,8 @@ const viewRenderers = {
                 <span>${escapeHtml(user.id)} | ${escapeHtml(user.email)}</span>
               </div>
             </td>
-            <td>${escapeHtml(roleLabel(user.role))}<br />${escapeHtml(user.function)}</td>
+            <td>${escapeHtml(roleLabel(user.role))}<br />${escapeHtml(user.function)}${user.payrollAccess ? `<br /><span class="access-chip">Planilla</span>` : ""}</td>
+            <td>${escapeHtml(branchScopeLabel(user.branchScope))}</td>
             <td>${user.active ? statusBadge("Activo") : statusBadge("Pausado")}</td>
             <td><div class="permission-list">${permissionBadges}</div></td>
             <td>
@@ -2053,10 +2571,24 @@ const viewRenderers = {
           ${inputField("Email", "email", "email", "", "required")}
           ${selectField("Funcion", "role", roleOptions, "recepcion", "required")}
           ${inputField("Detalle de funcion", "function", "text", "Recepcion y agenda", "required")}
+          ${selectField("Sucursal asignada", "branchScope", branchScopeOptions(), "all")}
+          ${
+            currentUser()?.role === "super"
+              ? selectField(
+                  "Acceso a planilla",
+                  "payrollAccess",
+                  [
+                    { value: "false", label: "No", selected: true },
+                    { value: "true", label: "Si" }
+                  ],
+                  "false"
+                )
+              : ""
+          }
         </div>
         <div class="permission-preview">
           <strong>Funciones base</strong>
-          <span>Super usuario y administrador: todo. Recepcion: clientes/citas/facturacion. Especialista: sesiones. Inventario: productos.</span>
+          <span>Super usuario y administrador: todo y todas las sucursales. Recepcion: clientes/citas/facturacion. Especialista: sesiones. Inventario: productos. La "Sucursal asignada" ata a la persona a una sede: no vera ni tocara datos de la otra.</span>
         </div>
         <button class="primary-action" type="submit">Guardar usuario</button>
       </form>
@@ -2067,7 +2599,7 @@ const viewRenderers = {
       "Nuevo usuario",
       form,
       "Usuarios y permisos",
-      renderTable(["Usuario", "Funcion", "Estado", "Permisos", "Acciones"], rows)
+      renderTable(["Usuario", "Funcion", "Sucursal", "Estado", "Permisos", "Acciones"], rows)
     );
   }
 };
@@ -2638,7 +3170,10 @@ function handleSubmit(event) {
     plan: addPlan,
     appointment: addAppointment,
     invoice: addInvoice,
-    user: addUser
+    user: addUser,
+    commission: addCommission,
+    benefit: addBenefit,
+    vacation: addVacation
   };
 
   handlers[form.dataset.form]?.(data);
@@ -2795,12 +3330,26 @@ function addInvoice(data) {
 
 function addUser(data) {
   const role = rolePresets[data.role] ? data.role : "recepcion";
+  // Super y admin ven todas las sedes; para el resto se respeta la sucursal
+  // elegida (o "all" si se dejo asi).
+  const chosenScope = typeof data.branchScope === "string" ? data.branchScope.trim() : "all";
+  const branchScope =
+    role === "super" || role === "admin"
+      ? "all"
+      : branchScopeValues.includes(chosenScope)
+        ? chosenScope
+        : "all";
+  // Acceso a planilla solo lo puede otorgar un super (el servidor tambien lo
+  // exige). Un admin creando una cuenta no puede darlo.
+  const payrollAccess = currentUser()?.role === "super" ? data.payrollAccess === "true" : false;
   state.users.push({
     id: nextId("USR", state.users),
     name: data.name.trim(),
     email: data.email.trim(),
     role,
     function: data.function.trim(),
+    branchScope,
+    payrollAccess,
     active: true,
     // Sin contrasena: la cuenta nueva no puede entrar hasta que su dueña la
     // cree con "¿Olvidaste tu contraseña?" en el login. Asi ninguna cuenta
@@ -2964,6 +3513,26 @@ function handleRowActions(event) {
 
   if (event.target.closest("[data-dashboard-export]")) {
     exportDashboardReport();
+    return;
+  }
+
+  const pagosPeriodButton = event.target.closest("[data-pagos-period]");
+  if (pagosPeriodButton) {
+    pagosPeriod = pagosPeriodButton.dataset.pagosPeriod;
+    renderView();
+    return;
+  }
+
+  if (event.target.closest("[data-pagos-export]")) {
+    exportPaidInvoices();
+    return;
+  }
+
+  const payrollDelButton = event.target.closest("[data-payroll-del]");
+  if (payrollDelButton) {
+    if (!requireWrite("planilla")) return;
+    const [kind, id] = payrollDelButton.dataset.payrollDel.split(":");
+    removePayrollRecord(kind, id);
     return;
   }
 
@@ -3345,7 +3914,9 @@ function dropdownOptions(menuName) {
   }
 
   if (menuName === "sucursal") {
-    return branchOptions.map((branch) => ({
+    // Una cuenta atada a una sede solo ve su sucursal en el menu: no puede
+    // siquiera intentar cambiar a la otra.
+    return allowedBranchOptions().map((branch) => ({
       label: branch.label,
       branch: branch.id
     }));
@@ -3642,6 +4213,12 @@ document.addEventListener("change", (event) => {
   if (stationSelect) {
     if (!requireWrite("enCurso")) return;
     setActiveStation(stationSelect.dataset.stationSelect, stationSelect.value);
+  }
+
+  const pagosBranchSelect = event.target.closest("[data-pagos-branch]");
+  if (pagosBranchSelect) {
+    pagosBranch = pagosBranchSelect.value;
+    renderView();
   }
 });
 
