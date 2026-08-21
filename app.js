@@ -4976,8 +4976,42 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     closeDropdown();
     closeStockReasonModal();
+    closeMobileNav();
   }
 });
+
+/* --- Navegacion movil (menu lateral deslizable) ----------------------- */
+// En pantallas chicas la barra lateral se oculta y se abre con el boton de
+// menu (hamburguesa). Se cierra al tocar el velo, al elegir un modulo, con
+// Escape, o al volver a pantalla grande.
+function openMobileNav() {
+  document.body.classList.add("nav-open");
+  document.getElementById("navToggle")?.setAttribute("aria-expanded", "true");
+}
+function closeMobileNav() {
+  if (!document.body.classList.contains("nav-open")) return;
+  document.body.classList.remove("nav-open");
+  document.getElementById("navToggle")?.setAttribute("aria-expanded", "false");
+}
+(() => {
+  const toggle = document.getElementById("navToggle");
+  const scrim = document.getElementById("navScrim");
+  if (toggle) {
+    toggle.addEventListener("click", () => {
+      if (document.body.classList.contains("nav-open")) closeMobileNav();
+      else openMobileNav();
+    });
+  }
+  if (scrim) scrim.addEventListener("click", closeMobileNav);
+  // Al elegir un modulo en el menu, se cierra para dejar ver el contenido.
+  document.querySelector(".sidebar")?.addEventListener("click", (event) => {
+    if (event.target.closest("[data-module]")) closeMobileNav();
+  });
+  // Si se agranda la pantalla, el menu deja de estar "abierto" (vuelve a fijo).
+  window.addEventListener("resize", () => {
+    if (window.innerWidth > 860) closeMobileNav();
+  });
+})();
 
 /* =====================================================================
    Interacción de inventario, panel lateral y fotos

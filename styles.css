@@ -2028,60 +2028,112 @@ th.num {
   }
 }
 
+/* El boton de menu (hamburguesa) solo se ve en movil. */
+.nav-toggle {
+  display: none;
+  place-items: center;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.nav-toggle svg { width: 20px; height: 20px; }
+.nav-scrim { display: none; }
+
+/* ===================================================================
+   Movil: menu lateral deslizable + tablas y formularios usables
+   =================================================================== */
 @media (max-width: 860px) {
-  :root {
-    --rail-w: 60px;
-    --gutter: 12px;
+  :root { --gutter: 12px; }
+
+  .nav-toggle { display: inline-grid; }
+  .nav-toggle:active { transform: scale(0.95); }
+
+  /* Una sola columna: el contenido ocupa todo el ancho y la barra lateral
+     pasa a ser un panel flotante que entra desde la izquierda. */
+  .app-shell { display: block; }
+
+  .sidebar {
+    position: fixed;
+    top: var(--topbar-h);
+    left: 0;
+    width: min(82vw, 300px);
+    height: calc(100dvh - var(--topbar-h));
+    padding: 12px;
+    transform: translateX(-100%);
+    transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
+    z-index: 60;
+    box-shadow: 10px 0 44px rgba(0, 0, 0, 0.22);
+  }
+  body.nav-open .sidebar { transform: translateX(0); }
+
+  /* Las etiquetas de modulo vuelven a verse (hay espacio en el panel). */
+  .module-label { display: flex; }
+  .module-button { justify-content: flex-start; padding: 0 12px; min-height: 46px; }
+  .rail-group { display: block; }
+
+  .nav-scrim {
+    display: block;
+    position: fixed;
+    inset: var(--topbar-h) 0 0 0;
+    z-index: 55;
+    background: rgba(0, 0, 0, 0.42);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 240ms ease;
+  }
+  body.nav-open .nav-scrim { opacity: 1; pointer-events: auto; }
+
+  /* Marca compacta y barra superior mas apretada. */
+  .brand { width: auto; }
+  .brand-copy { display: none; }
+  .topbar { gap: 10px; padding: 0 12px; }
+
+  .toolbar { width: 100%; margin-left: 0; flex-wrap: wrap; }
+  .search-box, .search-box input { width: 100%; }
+
+  /* Panel de formulario a pantalla completa. */
+  .drawer { width: 100vw; max-width: 100vw; }
+
+  /* Tablas: se deslizan de lado y la primera columna (el nombre) queda fija
+     para no perder el contexto al mirar los valores. */
+  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .table-wrap table { width: max-content; min-width: 100%; }
+  .table-wrap th:first-child,
+  .table-wrap td:first-child {
+    position: sticky;
+    left: 0;
+    background: var(--surface);
+    z-index: 1;
   }
 
-  .app-shell {
-    grid-template-columns: var(--rail-w) minmax(0, 1fr);
-  }
+  /* Filas de metricas / KPIs en dos columnas. */
+  .metric { flex-basis: calc(50% - 6px); }
+  .dash-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
-  .brand-copy,
-  .module-label {
-    display: none;
-  }
+  /* Chips de filtro deslizables en una sola linea. */
+  .filter-bar { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 4px; }
+  .filter-chip { flex: none; }
+  .inventory-bar { flex-direction: column; align-items: stretch; }
 
-  .brand {
-    width: auto;
-  }
-
-  .module-button {
-    justify-content: center;
-    padding: 0;
-  }
-
-  .drawer {
-    width: 100vw;
-  }
-
-  .toolbar {
-    width: 100%;
-    margin-left: 0;
-  }
-
-  .search-box {
-    width: 100%;
-  }
-
-  .search-box input {
-    width: 100%;
-  }
+  /* Objetivos tactiles mas comodos. */
+  .row-action { min-height: 34px; }
 }
 
 @media (max-width: 560px) {
-  body {
-    font-size: 16px;
-  }
-
-  .metric {
-    flex-basis: 50%;
-  }
-
-  .inline-actions {
-    justify-content: flex-start;
-  }
+  body { font-size: 16px; }
+  .metric, .dash-kpi { flex-basis: 100%; }
+  .dash-kpis { grid-template-columns: 1fr; }
+  .inline-actions { justify-content: flex-start; flex-wrap: wrap; }
+  /* Formularios de una sola columna: mas comodos de llenar con el pulgar. */
+  .form-grid { grid-template-columns: 1fr; }
+  .field-row { grid-template-columns: 1fr; }
+  .module-headline { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .action-row { width: 100%; }
 }
 
 /* ---------------------------------------------------------------------
