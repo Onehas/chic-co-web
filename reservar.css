@@ -678,6 +678,42 @@ button {
   color: var(--ink-3);
   font-size: 13.5px;
 }
+
+/* --- Especialistas ---------------------------------------------------- */
+
+.specialists {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.specialist {
+  padding: 9px 14px;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1.5px solid transparent;
+  border-radius: 999px;
+  font-size: 14px;
+  transition: border-color 150ms var(--ease-out), background 150ms var(--ease-out),
+    transform 130ms var(--ease-out);
+}
+
+.specialist:active {
+  transform: scale(0.95);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .specialist:hover {
+    background: var(--surface-3);
+  }
+}
+
+.specialist.is-selected {
+  color: var(--on-brand);
+  background: var(--brand);
+  border-color: var(--brand);
+  font-weight: 600;
+}
 .slots-empty:empty {
   display: none;
 }

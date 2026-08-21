@@ -1585,8 +1585,13 @@ async function handlePublicBooking(req, res, url) {
       sendError(req, res, 400, "Sucursal invalida.");
       return;
     }
+    const specialist = String(url.searchParams.get("specialist") || "").trim();
+    if (!publicBooking.isKnownSpecialist(state, branchId, specialist)) {
+      sendError(req, res, 400, "Esa especialista no atiende en esta sucursal.");
+      return;
+    }
     const pending = await bookingStore.pendingForDay(branchId, date);
-    const { slots, reason } = publicBooking.availableSlots(state, branchId, date, duration, pending);
+    const { slots, reason } = publicBooking.availableSlots(state, branchId, date, duration, pending, Date.now(), specialist);
     sendJson(req, res, 200, { ok: true, slots, reason });
     return;
   }
@@ -1640,6 +1645,13 @@ async function handlePublicBooking(req, res, url) {
 
     const date = String(payload.date || "");
     const time = String(payload.time || "");
+    // Especialista elegida (opcional). Debe pertenecer a la sucursal; si no, se
+    // rechaza para que nadie inyecte un nombre arbitrario en la agenda.
+    const specialist = String(payload.specialist || "").trim();
+    if (!publicBooking.isKnownSpecialist(state, branchId, specialist)) {
+      sendError(req, res, 400, "Esa especialista no atiende en esta sucursal.");
+      return;
+    }
 
     let request;
     try {
@@ -1648,7 +1660,7 @@ async function handlePublicBooking(req, res, url) {
       // pasen ambas la validacion antes de que cualquiera se guarde.
       request = await withBookingLock(async () => {
         const freshPending = await bookingStore.pendingForDay(branchId, date);
-        const problem = publicBooking.validateSlot(state, branchId, date, time, procedure.duration, freshPending);
+        const problem = publicBooking.validateSlot(state, branchId, date, time, procedure.duration, freshPending, Date.now(), specialist);
         if (problem) {
           const conflict = new Error(problem);
           conflict.statusCode = 409;
@@ -1665,6 +1677,7 @@ async function handlePublicBooking(req, res, url) {
           clientEmail: email,
           clientPhone: phone,
           notes: payload.notes,
+          specialist,
           sourceIp: clientIp(req)
         });
       });
@@ -1870,7 +1883,9 @@ async function handleBookingInbox(req, res, url, session, pathname) {
     return;
   }
 
-  const specialist = String(payload.specialist || "").trim();
+  // Recepcion confirma con una especialista; si no la indica, se toma la que la
+  // clienta eligio al reservar en linea (cuando eligio alguna).
+  const specialist = String(payload.specialist || "").trim() || String(existing.specialist || "").trim();
   if (!specialist) {
     sendError(req, res, 400, "Indique que especialista atendera la cita.");
     return;

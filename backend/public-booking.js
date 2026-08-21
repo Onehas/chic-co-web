@@ -93,12 +93,39 @@ function bookableProcedures(state, branchId) {
     }));
 }
 
+// Roster por defecto de especialistas que ofrece la pagina publica. Los nombres
+// deben coincidir con los de la agenda interna (app.js: procedureSpecialists)
+// para que una cita confirmada quede asignada a la misma persona y su hueco se
+// respete en las dos vistas. Si una sucursal define su propia lista en
+// `state.branches[id].specialists`, esa manda.
+const DEFAULT_SPECIALISTS = [
+  "Andrea Morales", "Paola Jimenez", "Camila Soto", "Natalia Vargas", "Sofia Marin",
+  "Valeria Campos", "Daniela Rojas", "Mariana Arias", "Laura Quiros", "Fernanda Solis",
+  "Karla Mendez", "Melissa Castro", "Gabriela Mora", "Isabel Pineda", "Lucia Herrera",
+  "Monica Salazar", "Rebeca Chacon", "Elena Navarro", "Cristina Vega", "Jimena Fuentes"
+];
+
+function specialistsForBranch(state, branchId) {
+  const raw = branchData(state, branchId).specialists;
+  const source = Array.isArray(raw) && raw.length
+    ? raw.map((item) => (typeof item === "string" ? item : item?.name)).filter(Boolean)
+    : DEFAULT_SPECIALISTS;
+  return [...new Set(source.map((name) => String(name).trim()).filter(Boolean))];
+}
+
+function isKnownSpecialist(state, branchId, specialist) {
+  const want = String(specialist || "").trim().toLowerCase();
+  if (!want) return true; // "sin preferencia" siempre es valido
+  return specialistsForBranch(state, branchId).some((name) => name.toLowerCase() === want);
+}
+
 function bookingConfig(state, branchLabels) {
   return {
     branches: Object.keys(state?.branches || {}).map((branchId) => ({
       id: branchId,
       label: branchLabels?.[branchId] || branchId,
-      procedures: bookableProcedures(state, branchId)
+      procedures: bookableProcedures(state, branchId),
+      specialists: specialistsForBranch(state, branchId)
     })),
     hours: { opens: toTime(openingMinutes), closes: toTime(closingMinutes), slotStep },
     closedWeekdays: [...closedWeekdays],
@@ -132,14 +159,22 @@ function appointmentsForDay(state, branchId, dateISO) {
 // Intervalos ya tomados: citas del personal mas solicitudes pendientes, que
 // tambien apartan el horario mientras recepcion decide. Sin contarlas, dos
 // personas distintas reservarian el mismo hueco antes de que nadie confirme.
-function busyIntervals(state, branchId, dateISO, pendingRequests = []) {
-  const fromAppointments = appointmentsForDay(state, branchId, dateISO).map((appointment) => {
-    const start = toMinutes(appointment.time);
-    return { start, end: start + (Number(appointment.duration) || 60) };
-  });
+// Con `specialist` se cuentan solo los intervalos de ESA persona: asi la
+// disponibilidad que se muestra es la de la especialista elegida, no la del
+// salon entero. Sin especialista (sin preferencia) se cuentan todos.
+function busyIntervals(state, branchId, dateISO, pendingRequests = [], specialist = "") {
+  const want = String(specialist || "").trim().toLowerCase();
+  const matches = (name) => !want || String(name || "").trim().toLowerCase() === want;
+
+  const fromAppointments = appointmentsForDay(state, branchId, dateISO)
+    .filter((appointment) => matches(appointment.specialist))
+    .map((appointment) => {
+      const start = toMinutes(appointment.time);
+      return { start, end: start + (Number(appointment.duration) || 60) };
+    });
 
   const fromRequests = pendingRequests
-    .filter((request) => request.branchId === branchId && request.date === dateISO)
+    .filter((request) => request.branchId === branchId && request.date === dateISO && matches(request.specialist))
     .map((request) => {
       const start = toMinutes(request.time);
       return { start, end: start + (Number(request.duration) || 60) };
@@ -164,13 +199,16 @@ function dayBlockReason(dateISO, now = Date.now()) {
   return "";
 }
 
-function availableSlots(state, branchId, dateISO, duration, pendingRequests = [], now = Date.now()) {
+function availableSlots(state, branchId, dateISO, duration, pendingRequests = [], now = Date.now(), specialist = "") {
   const blocked = dayBlockReason(dateISO, now);
   if (blocked) return { slots: [], reason: blocked };
 
   const safeDuration = Math.min(480, Math.max(15, Number(duration) || 60));
-  const intervals = busyIntervals(state, branchId, dateISO, pendingRequests);
-  const capacity = capacityFor(state, branchId);
+  const wantSpecialist = String(specialist || "").trim();
+  const intervals = busyIntervals(state, branchId, dateISO, pendingRequests, wantSpecialist);
+  // Con una especialista elegida, su capacidad es 1: solo puede atender a una
+  // clienta a la vez. Sin preferencia, se usa la capacidad del salon.
+  const capacity = wantSpecialist ? 1 : capacityFor(state, branchId);
   const today = localNow(now);
   const isToday = today.date === dateISO;
   const earliest = isToday ? today.minutes + minLeadMinutes : 0;
@@ -191,7 +229,7 @@ function availableSlots(state, branchId, dateISO, duration, pendingRequests = []
 // Ultima comprobacion antes de guardar. La pagina ya filtro los horarios, pero
 // entre que la clienta eligio y pulso "reservar" pueden haber pasado minutos y
 // alguien mas pudo tomar el hueco.
-function validateSlot(state, branchId, dateISO, time, duration, pendingRequests = [], now = Date.now()) {
+function validateSlot(state, branchId, dateISO, time, duration, pendingRequests = [], now = Date.now(), specialist = "") {
   const blocked = dayBlockReason(dateISO, now);
   if (blocked) return blocked;
 
@@ -208,9 +246,13 @@ function validateSlot(state, branchId, dateISO, time, duration, pendingRequests 
     return `Necesitamos al menos ${Math.round(minLeadMinutes / 60)} horas de anticipacion.`;
   }
 
-  const intervals = busyIntervals(state, branchId, dateISO, pendingRequests);
-  if (overlapCount(intervals, start, start + safeDuration) >= capacityFor(state, branchId)) {
-    return "Ese horario se acaba de ocupar. Elija otro, por favor.";
+  const wantSpecialist = String(specialist || "").trim();
+  const intervals = busyIntervals(state, branchId, dateISO, pendingRequests, wantSpecialist);
+  const capacity = wantSpecialist ? 1 : capacityFor(state, branchId);
+  if (overlapCount(intervals, start, start + safeDuration) >= capacity) {
+    return wantSpecialist
+      ? "Esa especialista se acaba de ocupar a esa hora. Elija otra hora u otra especialista."
+      : "Ese horario se acaba de ocupar. Elija otro, por favor.";
   }
 
   return "";
@@ -240,6 +282,8 @@ module.exports = {
   toMinutes,
   localNow,
   bookableProcedures,
+  specialistsForBranch,
+  isKnownSpecialist,
   bookingConfig,
   capacityFor,
   busyIntervals,

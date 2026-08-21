@@ -17,6 +17,9 @@
     branchGroup: document.getElementById("branchGroup"),
     serviceGroup: document.getElementById("serviceGroup"),
     servicePicked: document.getElementById("servicePicked"),
+    specialistStep: document.getElementById("specialistStep"),
+    specialistGroup: document.getElementById("specialistGroup"),
+    specialistPicked: document.getElementById("specialistPicked"),
     datePicked: document.getElementById("datePicked"),
     timePicked: document.getElementById("timePicked"),
     dayStrip: document.getElementById("dayStrip"),
@@ -43,7 +46,8 @@
   };
 
   let config = null;
-  const sel = { branchId: "", procedureId: "", date: "", time: "" };
+  // `specialist` vacio = sin preferencia (el salon asigna a quien este libre).
+  const sel = { branchId: "", procedureId: "", specialist: "", date: "", time: "" };
   let sending = false;
   // Cada peticion de disponibilidad lleva numero: si cambian de dia mientras la
   // anterior sigue en vuelo, la respuesta vieja no debe pintar el dia equivocado.
@@ -116,11 +120,14 @@
   function refresh() {
     const done = {
       service: Boolean(sel.procedureId),
+      // La especialista es opcional: el paso se da por resuelto en cuanto hay
+      // servicio (por defecto "Sin preferencia"), asi nunca bloquea el avance.
+      specialist: Boolean(sel.procedureId),
       date: Boolean(sel.date),
       time: Boolean(sel.time),
       details: Boolean(el.name.value.trim() && el.phone.value.trim() && el.email.value.trim())
     };
-    const order = ["service", "date", "time", "details"];
+    const order = ["service", "specialist", "date", "time", "details"];
 
     el.steps.forEach((step) => {
       const key = step.dataset.step;
@@ -133,10 +140,36 @@
     });
 
     el.servicePicked.textContent = done.service ? procedure()?.name || "" : "";
+    if (el.specialistPicked) el.specialistPicked.textContent = sel.procedureId ? (sel.specialist || "Sin preferencia") : "";
     el.datePicked.textContent = done.date ? shortDateLabel(sel.date) : "";
     el.timePicked.textContent = done.time ? sel.time : "";
 
     updateActionbar(done);
+  }
+
+  /* --- Especialistas --------------------------------------------------- */
+
+  function fillSpecialists() {
+    if (!el.specialistGroup) return;
+    const specialists = branch()?.specialists || [];
+    // Si la especialista elegida ya no atiende en esta sucursal, se limpia.
+    if (sel.specialist && !specialists.includes(sel.specialist)) {
+      sel.specialist = "";
+      sel.time = "";
+    }
+    if (el.specialistStep) el.specialistStep.hidden = specialists.length === 0;
+    if (!specialists.length) return;
+
+    const option = (value, label) => {
+      const selected = value === sel.specialist;
+      return `<button type="button" role="radio" aria-checked="${selected}" class="specialist${
+        selected ? " is-selected" : ""
+      }" data-specialist="${escapeHtml(value)}">${escapeHtml(label)}</button>`;
+    };
+    el.specialistGroup.innerHTML = [
+      option("", "Sin preferencia"),
+      ...specialists.map((name) => option(name, name))
+    ].join("");
   }
 
   function shortDateLabel(iso) {
@@ -195,6 +228,8 @@
       sel.procedureId = "";
       sel.time = "";
     }
+
+    fillSpecialists();
 
     if (!procedures.length) {
       el.serviceGroup.innerHTML = `<p class="slots-empty">Esta sucursal aun no tiene servicios en linea.</p>`;
@@ -293,6 +328,7 @@
 
     try {
       const query = new URLSearchParams({ branchId: sel.branchId, date: sel.date, duration: String(p.duration) });
+      if (sel.specialist) query.set("specialist", sel.specialist);
       const result = await api(`/api/public/availability?${query}`);
       if (token !== availabilityToken) return;
 
@@ -362,6 +398,7 @@
         body: JSON.stringify({
           branchId: sel.branchId,
           procedureId: sel.procedureId,
+          specialist: sel.specialist,
           date: sel.date,
           time: sel.time,
           clientName: el.name.value,
@@ -396,6 +433,7 @@
   function restart() {
     el.form.reset();
     sel.procedureId = "";
+    sel.specialist = "";
     sel.date = "";
     sel.time = "";
     el.slots.innerHTML = "";
@@ -425,6 +463,7 @@
       b.classList.toggle("is-selected", active);
       b.setAttribute("aria-checked", String(active));
     });
+    sel.specialist = "";
     sel.date = "";
     sel.time = "";
     el.dayStrip.querySelectorAll(".day").forEach((c) => {
@@ -449,6 +488,22 @@
     if (sel.date) loadSlots();
     else refresh();
   });
+
+  if (el.specialistGroup) {
+    el.specialistGroup.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-specialist]");
+      if (!button) return;
+      sel.specialist = button.dataset.specialist || "";
+      el.specialistGroup.querySelectorAll(".specialist").forEach((s) => {
+        const active = s === button;
+        s.classList.toggle("is-selected", active);
+        s.setAttribute("aria-checked", String(active));
+      });
+      // Cambiar de especialista cambia la disponibilidad: se recalculan las horas.
+      if (sel.date) loadSlots();
+      else refresh();
+    });
+  }
 
   el.dayStrip.addEventListener("click", (event) => {
     const chip = event.target.closest("[data-day]");
@@ -501,7 +556,7 @@
   // Navegacion con flechas dentro de cada grupo de opciones (servicio, dia,
   // hora). Es aditiva: el Tab sigue llegando a cada opcion; las flechas mueven
   // el foco a la vecina y la seleccionan, como espera el patron de radiogroup.
-  [el.branchGroup, el.serviceGroup, el.dayStrip, el.slots].forEach((group) => {
+  [el.branchGroup, el.serviceGroup, el.specialistGroup, el.dayStrip, el.slots].forEach((group) => {
     if (!group) return;
     group.addEventListener("keydown", (event) => {
       const keys = ["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"];

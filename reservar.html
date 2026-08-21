@@ -47,9 +47,20 @@
           </div>
         </section>
 
-        <section class="card is-locked" data-step="date">
+        <section class="card is-locked" data-step="specialist" id="specialistStep">
           <div class="card-head">
             <span class="card-index">2</span>
+            <h2>Especialista</h2>
+            <span class="card-picked" id="specialistPicked"></span>
+            <svg class="card-check" viewBox="0 0 20 20" aria-hidden="true"><path d="M5 10.5l3.2 3.2L15 7" /></svg>
+          </div>
+          <p class="hint">Elige con quién quieres tu cita, o deja "Sin preferencia" y te asignamos a la especialista disponible.</p>
+          <div class="specialists" id="specialistGroup" role="radiogroup" aria-label="Elige la especialista"></div>
+        </section>
+
+        <section class="card is-locked" data-step="date">
+          <div class="card-head">
+            <span class="card-index">3</span>
             <h2>Dia</h2>
             <span class="card-picked" id="datePicked"></span>
             <svg class="card-check" viewBox="0 0 20 20" aria-hidden="true"><path d="M5 10.5l3.2 3.2L15 7" /></svg>
@@ -67,7 +78,7 @@
 
         <section class="card is-locked" data-step="time">
           <div class="card-head">
-            <span class="card-index">3</span>
+            <span class="card-index">4</span>
             <h2>Hora</h2>
             <span class="card-picked" id="timePicked"></span>
             <svg class="card-check" viewBox="0 0 20 20" aria-hidden="true"><path d="M5 10.5l3.2 3.2L15 7" /></svg>
@@ -78,7 +89,7 @@
 
         <section class="card is-locked" data-step="details">
           <div class="card-head">
-            <span class="card-index">4</span>
+            <span class="card-index">5</span>
             <h2>Tus datos</h2>
             <svg class="card-check" viewBox="0 0 20 20" aria-hidden="true"><path d="M5 10.5l3.2 3.2L15 7" /></svg>
           </div>
