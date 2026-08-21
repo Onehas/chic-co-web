@@ -243,6 +243,20 @@ async function sendDailyReport({ subject, title, intro, rows, footnote }) {
   });
 }
 
+// Enlace para restablecer la contrasena. El enlace expira; el correo lo deja
+// claro para que nadie lo guarde pensando que sirve para siempre.
+async function sendPasswordReset({ to, name, resetUrl, minutes }) {
+  return sendEmail({
+    to,
+    subject: "Restablecer tu contrasena de Chic & Co",
+    html: layout({
+      title: "Restablecer tu contrasena",
+      intro: `Hola ${escapeHtml(String(name || "").split(" ")[0] || "")}, recibimos una solicitud para cambiar tu contrasena. Si fuiste tu, usa el boton (el enlace vence en ${escapeHtml(String(minutes))} minutos). Si no fuiste tu, ignora este correo: tu contrasena no cambia.<br><br><a href="${escapeHtml(resetUrl)}" style="display:inline-block;padding:10px 18px;background:#1d1d1f;color:#ffffff;text-decoration:none;border-radius:8px;font-size:14px;font-weight:600;">Cambiar mi contrasena</a>`,
+      footnote: "Si el boton no abre, copia y pega este enlace en el navegador:<br>" + escapeHtml(resetUrl)
+    })
+  });
+}
+
 module.exports = {
   isConfigured,
   staffRecipients,
@@ -255,5 +269,6 @@ module.exports = {
   sendRequestConfirmed,
   sendRequestRejected,
   sendStaffNewRequest,
-  sendDailyReport
+  sendDailyReport,
+  sendPasswordReset
 };

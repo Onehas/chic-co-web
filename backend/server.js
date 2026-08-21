@@ -12,6 +12,7 @@ const dailyReport = require("./daily-report");
 const alegra = require("./alegra");
 const alegraConfigStore = require("./alegra-config-store");
 const settingsStore = require("./settings-store");
+const passwordResetStore = require("./password-reset-store");
 const collectionStore = require("./collection-store");
 
 // Pixeles de marketing para la pagina publica de reservas. Los ids NO son
@@ -414,6 +415,22 @@ async function destroySession(token) {
     await pool.query("DELETE FROM app_sessions WHERE token = $1", [token]);
   } catch (error) {
     console.error("No se pudo borrar la sesion en Postgres:", error.message);
+  }
+}
+
+// Cierra TODAS las sesiones de un usuario. Se usa al restablecer la contrasena:
+// si alguien la cambia (o se la roban y la recupera el dueño), los tokens
+// viejos dejan de servir de inmediato.
+async function destroySessionsForUser(userId) {
+  for (const [token, session] of sessions) {
+    if (session.userId === userId) sessions.delete(token);
+  }
+  if (!databaseUrl) return;
+  try {
+    const pool = await getPostgresPool();
+    await pool.query("DELETE FROM app_sessions WHERE user_id = $1", [userId]);
+  } catch (error) {
+    console.error("No se pudieron borrar las sesiones del usuario:", error.message);
   }
 }
 
@@ -1565,6 +1582,62 @@ async function handlePublicBooking(req, res, url) {
       ok: true,
       request: { id: request.id, date: request.date, time: request.time, status: request.status }
     });
+    return;
+  }
+
+  // Solicitar un enlace de restablecimiento. Se responde 200 siempre (exista o
+  // no el correo) para no revelar que cuentas existen. Con el mismo limitador
+  // que las reservas, para que no se use como fuente de spam.
+  if (pathname === "/api/public/password-reset/request" && req.method === "POST") {
+    if (publicRateLimited(req)) {
+      sendError(req, res, 429, "Demasiadas solicitudes. Intente de nuevo mas tarde.");
+      return;
+    }
+    const payload = await readJsonBody(req);
+    const email = String(payload.email || "").trim().toLowerCase();
+    const genericOk = () => sendJson(req, res, 200, { ok: true });
+    if (!email) return genericOk();
+
+    const state = await ensureState();
+    const user = (state.users || []).find(
+      (item) => item.active !== false && String(item.email || "").trim().toLowerCase() === email
+    );
+    if (user) {
+      try {
+        const { token, minutes } = await passwordResetStore.create(user.id);
+        const resetUrl = `${expectedOrigin(req)}/?reset=${encodeURIComponent(token)}`;
+        // No bloquea la respuesta: el correo sale en segundo plano.
+        mailer.sendPasswordReset({ to: user.email, name: user.name, resetUrl, minutes }).catch(() => {});
+      } catch (error) {
+        console.error("No se pudo crear el enlace de restablecimiento:", error.message);
+      }
+    }
+    return genericOk();
+  }
+
+  // Confirmar el cambio con el token del correo.
+  if (pathname === "/api/public/password-reset/confirm" && req.method === "POST") {
+    const payload = await readJsonBody(req);
+    const token = String(payload.token || "");
+    const password = String(payload.password || "");
+    if (password.length < 10) {
+      sendError(req, res, 400, "La contrasena debe tener al menos 10 caracteres.");
+      return;
+    }
+    const userId = await passwordResetStore.consume(token);
+    if (!userId) {
+      sendError(req, res, 400, "El enlace no es valido o ya vencio. Solicita uno nuevo.");
+      return;
+    }
+    const hash = await hashPasswordModernAsync(password);
+    const ok = await setUserPasswordHash(userId, hash);
+    if (!ok) {
+      sendError(req, res, 500, "No se pudo cambiar la contrasena. Intenta de nuevo.");
+      return;
+    }
+    // Cierra cualquier sesion vieja de esa cuenta.
+    await destroySessionsForUser(userId);
+    sendJson(req, res, 200, { ok: true });
     return;
   }
 

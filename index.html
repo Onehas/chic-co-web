@@ -48,6 +48,34 @@
           <p class="login-error" id="loginError" role="alert"></p>
           <button class="primary-action" type="submit" id="loginSubmit">Entrar</button>
         </form>
+
+        <button class="login-link" type="button" id="forgotLink">¿Olvidaste tu contraseña?</button>
+
+        <form class="login-form is-hidden" id="recoverForm" autocomplete="off">
+          <p class="login-help">Escribe tu correo y te enviamos un enlace para crear una contraseña nueva.</p>
+          <label class="field">
+            <span>Email</span>
+            <input id="recoverEmail" name="email" type="email" autocomplete="username" placeholder="correo@dominio.com" required />
+          </label>
+          <p class="login-note" id="recoverMsg" role="status" aria-live="polite"></p>
+          <button class="primary-action" type="submit" id="recoverSubmit">Enviar enlace</button>
+          <button class="login-link" type="button" id="recoverBack">Volver a iniciar sesión</button>
+        </form>
+
+        <form class="login-form is-hidden" id="resetForm" autocomplete="off">
+          <p class="login-help">Crea tu contraseña nueva (mínimo 10 caracteres).</p>
+          <label class="field">
+            <span>Nueva contraseña</span>
+            <input id="resetPassword" name="password" type="password" autocomplete="new-password" minlength="10" required />
+          </label>
+          <label class="field">
+            <span>Repite la contraseña</span>
+            <input id="resetPassword2" name="password2" type="password" autocomplete="new-password" minlength="10" required />
+          </label>
+          <p class="login-error" id="resetError" role="alert"></p>
+          <p class="login-note" id="resetMsg" role="status" aria-live="polite"></p>
+          <button class="primary-action" type="submit" id="resetSubmit">Cambiar contraseña</button>
+        </form>
       </div>
     </section>
 
@@ -380,6 +408,7 @@
     <script src="marketing-pixels.js"></script>
     <script src="data-import.js"></script>
     <script src="integrations.js"></script>
+    <script src="password-reset.js"></script>
     <script src="production-tools.js"></script>
     <script>
       // Conmutador de tema: automatico -> claro -> oscuro -> automatico.
