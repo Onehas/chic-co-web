@@ -717,17 +717,8 @@ body.is-authenticated .login-screen {
 }
 
 @media (max-width: 860px) {
-  /* El riel queda reducido a iconos: los rotulos de grupo no caben y se
-     salian del ancho. Se sustituyen por una linea separadora. */
-  .rail-group {
-    height: 1px;
-    margin: 6px 8px;
-    padding: 0;
-    overflow: hidden;
-    background: var(--line);
-    text-indent: -999px;
-  }
-
+  /* El menu movil es un panel con espacio: los rotulos de grupo se muestran
+     completos (antes, con el riel de iconos, se convertian en una linea). */
   .module-headline .action-row {
     margin-left: 0;
     width: 100%;
@@ -868,6 +859,10 @@ body.is-authenticated .login-screen {
 
 .view-content {
   display: grid;
+  /* minmax(0,1fr): sin esto, la columna implicita del grid crece al ancho del
+     contenido (max-content) y una tabla ancha -como la de planilla- estiraba
+     la pagina entera en vez de deslizarse dentro de su .table-wrap. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   min-width: 0;
 }
@@ -878,6 +873,7 @@ body.is-authenticated .login-screen {
 
 .view-grid {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   min-width: 0;
 }
@@ -2088,10 +2084,25 @@ th.num {
   }
   body.nav-open .nav-scrim { opacity: 1; pointer-events: auto; }
 
-  /* Marca compacta y barra superior mas apretada. */
-  .brand { width: auto; }
-  .brand-copy { display: none; }
-  .topbar { gap: 10px; padding: 0 12px; }
+  /* Barra superior compacta: la marca cede el espacio a la sucursal y al
+     usuario, y los textos largos se recortan con puntos suspensivos en vez
+     de montarse unos sobre otros o partirse en dos lineas. */
+  .brand { display: none; }
+  .topbar { gap: 8px; padding: 0 10px; }
+  .main-nav { flex: 1 1 auto; min-width: 0; justify-content: center; }
+  .nav-link { max-width: 100%; min-width: 0; }
+  .nav-link span:not(.chevron):not(.branch-dot) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .user-menu { min-width: 0; }
+  .user-menu span:first-child {
+    max-width: 84px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 
   .toolbar { width: 100%; margin-left: 0; flex-wrap: wrap; }
   .search-box, .search-box input { width: 100%; }
@@ -2109,31 +2120,70 @@ th.num {
     left: 0;
     background: var(--surface);
     z-index: 1;
+    /* linea divisoria: se nota donde termina la columna fija al deslizar */
+    box-shadow: inset -1px 0 0 var(--line);
   }
+  .table-wrap thead th:first-child { background: var(--surface-2); }
 
   /* Filas de metricas / KPIs en dos columnas. */
   .metric { flex-basis: calc(50% - 6px); }
   .dash-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dash-grid { grid-template-columns: 1fr; }
 
-  /* Chips de filtro deslizables en una sola linea. */
-  .filter-bar { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 4px; }
+  /* Chips de filtro deslizables en una sola linea, contenidos en su marco. */
+  .filter-bar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 4px;
+    min-width: 0;
+    max-width: 100%;
+  }
   .filter-chip { flex: none; }
-  .inventory-bar { flex-direction: column; align-items: stretch; }
+  .inventory-bar, .proveedores-bar { flex-direction: column; align-items: stretch; min-width: 0; }
+  .inventory-bar > *, .proveedores-bar > * { min-width: 0; }
 
   /* Objetivos tactiles mas comodos. */
   .row-action { min-height: 34px; }
+
+  /* El pie del panel de formulario respeta la zona segura del iPhone, y el
+     aviso flotante no tapa los botones Guardar/Cancelar mientras esta abierto. */
+  .drawer-foot { padding-bottom: calc(13px + env(safe-area-inset-bottom, 0px)); }
+  body.drawer-open .toast { bottom: 96px; }
 }
 
 @media (max-width: 560px) {
   body { font-size: 16px; }
-  .metric, .dash-kpi { flex-basis: 100%; }
-  .dash-kpis { grid-template-columns: 1fr; }
+
+  /* Metricas del modulo: fila compacta de tres, no una torre a lo alto. */
+  .metric { flex: 1 1 33%; padding: 8px 12px; }
+  .metric strong { font-size: 16px; }
+
+  /* KPIs del dashboard: dos por fila con numeros mas contenidos. */
+  .dash-kpi { padding: 11px 12px; }
+  .dash-kpi-value { font-size: 17px; }
+
   .inline-actions { justify-content: flex-start; flex-wrap: wrap; }
-  /* Formularios de una sola columna: mas comodos de llenar con el pulgar. */
-  .form-grid { grid-template-columns: 1fr; }
+
+  /* Formularios de una sola columna: mas comodos de llenar con el pulgar.
+     Incluye el panel lateral (su regla propia es mas especifica). */
+  .form-grid,
+  .drawer-body .form-grid,
+  .payroll-form .form-grid { grid-template-columns: 1fr; }
   .field-row { grid-template-columns: 1fr; }
+  .roster-services-grid { grid-template-columns: 1fr; }
+
   .module-headline { flex-direction: column; align-items: flex-start; gap: 10px; }
   .action-row { width: 100%; }
+
+  /* Aviso flotante centrado abajo, sin tapar contenido pegado al borde. */
+  .toast {
+    left: 12px;
+    right: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    max-width: none;
+    text-align: center;
+  }
 }
 
 /* ---------------------------------------------------------------------
@@ -2472,7 +2522,9 @@ th.num {
 }
 .dash-kpis {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  /* auto-fit: el dashboard trae 5 tarjetas y la planilla 4; con columnas
+     fijas la ultima quedaba como hueco vacio. */
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: 12px;
   margin-bottom: 20px;
 }
@@ -2646,6 +2698,9 @@ th.num {
 }
 .payroll-table { min-width: 980px; font-variant-numeric: tabular-nums; }
 .payroll-table th { white-space: nowrap; }
+/* El nombre en una sola linea: la tabla ya se desliza dentro de su marco,
+   partir "Yamileth Romero Rodriguez" en tres renglones solo estorbaba. */
+.payroll-table td:first-child { white-space: nowrap; }
 .pay-input { padding: 4px 6px; }
 .pay-cell {
   width: 78px;
