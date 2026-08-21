@@ -2712,7 +2712,7 @@ function addPlan(data) {
   const procedure = getProcedure(data.procedureId);
   const client = state.clients.find((item) => item.id === data.clientId);
   const sessionsTotal = Number(data.sessionsTotal || procedure?.sessions || 1);
-  const title = data.title.trim() || `${procedure?.name || "Plan"} - ${client?.name || "Cliente"}`;
+  const title = (data.title || "").trim() || `${procedure?.name || "Plan"} - ${client?.name || "Cliente"}`;
   const total = Number(data.total || (procedure?.price || 0) * sessionsTotal);
   const start = data.start || todayISO();
 
@@ -2729,7 +2729,7 @@ function addPlan(data) {
     paid: Number(data.paid || 0),
     total,
     status: "Activo",
-    notes: data.notes.trim()
+    notes: (data.notes || "").trim()
   });
   prefill = {};
   persistAndRender("Plan guardado");
