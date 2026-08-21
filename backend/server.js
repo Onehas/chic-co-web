@@ -604,7 +604,7 @@ function userCanAccessBranch(user, branchId) {
 // Datos de planilla / RRHH (comisiones, beneficios usados, vacaciones). Son
 // datos sensibles del personal: viven en el nivel superior del estado (no son
 // de una sucursal) y solo los ve y los toca quien tenga acceso explicito.
-const payrollCollections = ["commissions", "benefits", "vacations"];
+const payrollCollections = ["staff", "commissions", "benefits", "vacations"];
 
 // Acceso a planilla: siempre el super, y cualquier cuenta a la que el super le
 // haya puesto payrollAccess. Un administrador NO lo tiene por su rol: la
@@ -2507,6 +2507,7 @@ async function handleApi(req, res, url) {
           currentUserId: freshState.currentUserId,
           users: freshState.users, // se conservan las cuentas
           branding: freshState.branding, // y la identidad del negocio
+          staff: [],
           commissions: [],
           benefits: [],
           vacations: [],

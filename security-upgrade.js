@@ -346,7 +346,7 @@
     // perder una comision/beneficio/vacacion que se guardo aqui mientras otra
     // persona guardaba algo mas. Para quien no tiene acceso a RRHH todas llegan
     // vacias y el servidor de todos modos ignora sus escrituras a planilla.
-    ["commissions", "benefits", "vacations"].forEach((key) => {
+    ["staff", "commissions", "benefits", "vacations"].forEach((key) => {
       merged[key] = mergeCollection(base?.[key], mine?.[key], merged[key]);
     });
 

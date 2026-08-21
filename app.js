@@ -104,8 +104,17 @@ const branchOptions = [
 // inicial, antes de que corra el resto del archivo.
 const branchScopeValues = ["all", ...branchOptions.map((branch) => branch.id)];
 
-// Colecciones de planilla / RRHH en el nivel superior del estado.
-const payrollKeys = ["commissions", "benefits", "vacations"];
+// Colecciones de planilla / RRHH en el nivel superior del estado. `staff` es el
+// registro de empleados (datos fijos); `commissions` guarda los ajustes de cada
+// quincena por persona; `benefits` y `vacations` el resto de RRHH.
+const payrollKeys = ["staff", "commissions", "benefits", "vacations"];
+
+// Deduccion obrera de la CCSS sobre el total del salario. Coincide con la
+// planilla real del salon (10.83%). Editable aqui si cambia la tasa.
+const CCSS_RATE = 0.1083;
+
+// Puestos del personal (para el registro de empleados).
+const puestoOptions = ["Estilista", "Esteticista", "Manicurista", "Administradora", "Recepcionista", "Mercadeo", "Bodega", "Otro"];
 
 // Categorias de especialista: cada persona atiende solo su tipo de servicio.
 const specialistCategories = [
@@ -176,6 +185,7 @@ const defaultState = {
   currentUserId: "USR-000",
   // Planilla / RRHH (datos de todo el negocio, no de una sucursal). Solo los ve
   // y edita quien el super usuario designe con payrollAccess.
+  staff: [],
   commissions: [],
   benefits: [],
   vacations: [],
@@ -1587,21 +1597,121 @@ function currentMonthISO() {
 // Nombres del personal para asignar comisiones/beneficios/vacaciones: cuentas
 // activas del sistema mas la lista de especialistas, sin repetir.
 function staffNames() {
+  const fromStaff = (state.staff || []).map((item) => item.name);
   const fromUsers = (state.users || []).filter((user) => user.active).map((user) => user.name);
   const fromSpecialists = procedureSpecialists.map((specialist) => specialist.name);
-  return [...new Set([...fromUsers, ...fromSpecialists].map((name) => String(name).trim()).filter(Boolean))].sort();
+  return [...new Set([...fromStaff, ...fromUsers, ...fromSpecialists].map((name) => String(name).trim()).filter(Boolean))].sort();
 }
 
 function staffOptions(selected = "") {
   return staffNames().map((name) => ({ value: name, label: name, selected: name === selected }));
 }
 
-function payrollCommission(record) {
-  return Math.round((Number(record.sales) || 0) * (Number(record.rate) || 0) / 100);
+/* --- Planilla quincenal (replica la planilla real del salon) ------------ */
+
+function staffList() {
+  return (state.staff || []).filter((item) => item && item.id);
+}
+function activeStaff() {
+  return staffList().filter((item) => item.active !== false);
+}
+function staffByName(name) {
+  const want = String(name || "").trim().toLowerCase();
+  return staffList().find((item) => String(item.name || "").trim().toLowerCase() === want) || null;
 }
 
-function payrollTotal(record) {
-  return (Number(record.baseSalary) || 0) + payrollCommission(record);
+// Quincena actual "YYYY-MM-Q1" / "YYYY-MM-Q2" (dias 1-15 / 16-fin de mes).
+function currentQuincena() {
+  const iso = todayISO();
+  return `${iso.slice(0, 7)}-Q${Number(iso.slice(8, 10)) <= 15 ? 1 : 2}`;
+}
+
+// Rango de fechas ISO que cubre una quincena.
+function quincenaRange(period) {
+  const match = String(period || "").match(/^(\d{4})-(\d{2})-Q([12])$/);
+  if (!match) return { from: "", to: "" };
+  const [, y, mo, q] = match;
+  if (q === "1") return { from: `${y}-${mo}-01`, to: `${y}-${mo}-15` };
+  const lastDay = new Date(Number(y), Number(mo), 0).getDate();
+  return { from: `${y}-${mo}-16`, to: `${y}-${mo}-${String(lastDay).padStart(2, "0")}` };
+}
+
+function quincenaLabel(period) {
+  const match = String(period || "").match(/^(\d{4})-(\d{2})-Q([12])$/);
+  if (!match) return period || "";
+  const [, y, mo, q] = match;
+  return `${q === "1" ? "1a" : "2a"} quincena de ${monthNames[Number(mo) - 1] || mo} ${y}`;
+}
+
+// Ultimas quincenas para el selector, de la actual hacia atras.
+function quincenaOptions(count = 8) {
+  const iso = todayISO();
+  let y = Number(iso.slice(0, 4));
+  let mo = Number(iso.slice(5, 7));
+  let q = Number(iso.slice(8, 10)) <= 15 ? 1 : 2;
+  const list = [];
+  for (let i = 0; i < count; i += 1) {
+    const period = `${y}-${String(mo).padStart(2, "0")}-Q${q}`;
+    list.push({ value: period, label: quincenaLabel(period) });
+    if (q === 2) {
+      q = 1;
+    } else {
+      q = 2;
+      mo -= 1;
+      if (mo < 1) { mo = 12; y -= 1; }
+    }
+  }
+  return list;
+}
+
+// Ventas reales de un colaborador dentro del rango de la quincena.
+function payrollSalesForQuincena(worker, period) {
+  const want = String(worker || "").trim().toLowerCase();
+  const { from, to } = quincenaRange(period);
+  if (!want || !from) return 0;
+  return allInvoicesAcrossBranches()
+    .filter((row) => String(row.collaborator || "").trim().toLowerCase() === want)
+    .filter((row) => {
+      const d = String(row.invoice.date || "").slice(0, 10);
+      return d >= from && d <= to;
+    })
+    .reduce((sum, row) => sum + invoiceTotal(row.invoice), 0);
+}
+
+// Fila de ajustes de una persona en una quincena (bonos, horas, feriados...).
+function payrollRun(worker, period) {
+  const want = String(worker || "").trim().toLowerCase();
+  return (state.commissions || []).find(
+    (item) => String(item.worker || "").trim().toLowerCase() === want && item.period === period
+  ) || null;
+}
+
+// Calcula TODO para una persona en una quincena, con la formula de la planilla
+// real: quincenal (base/2), hora (quincenal/120), dia (quincenal/15), feriado,
+// extra (hora x1.5), rebajo, incapacidad, comision (de las ventas x %), total
+// salario, CCSS (10.83%) y total a pagar.
+function computePayroll(staff, run, period) {
+  const base = Number(staff?.salarioBase || 0);
+  const quincenal = base / 2;
+  const hora = quincenal / 120;
+  const diaValor = quincenal / 15;
+  const feriado = diaValor * Number(run?.feriadoDias || 0);
+  const extra = hora * 1.5 * Number(run?.horasExtra || 0);
+  const rebajo = hora * Number(run?.horasRebajo || 0);
+  const incapacidad = diaValor * Number(run?.incapacidadDias || 0);
+  const bonos = Number(run?.bonos || 0);
+  const otrosRebajos = Number(run?.otrosRebajos || 0);
+  const ventas = payrollSalesForQuincena(staff?.name, period);
+  // Comision: si se escribio una manual se respeta; si no, ventas x % del puesto.
+  const manual = run?.comisionManual;
+  const comision =
+    manual !== "" && manual != null && Number.isFinite(Number(manual))
+      ? Number(manual)
+      : Math.round(ventas * Number(staff?.comisionRate || 0) / 100);
+  const totalSalario = quincenal + extra + feriado + comision + bonos - incapacidad - rebajo;
+  const ccss = totalSalario * CCSS_RATE;
+  const totalPagar = totalSalario - ccss - otrosRebajos;
+  return { base, quincenal, hora, feriado, extra, rebajo, incapacidad, bonos, ventas, comision, otrosRebajos, totalSalario, ccss, totalPagar };
 }
 
 function vacationDays(fromISO, toISO) {
@@ -1611,20 +1721,112 @@ function vacationDays(fromISO, toISO) {
   return Math.round((to - from) / (24 * 60 * 60 * 1000)) + 1;
 }
 
-function addCommission(data) {
-  const worker = (data.worker || "").trim();
-  if (!worker) return showToast("Elige a la persona");
-  state.commissions.unshift({
-    id: nextId("COM", state.commissions),
-    worker,
-    period: (data.period || currentMonthISO()).trim(),
-    baseSalary: Number(data.baseSalary || 0),
-    sales: Number(data.sales || 0),
-    rate: Number(data.rate || 0),
-    status: data.status || "Pendiente",
-    notes: (data.notes || "").trim()
+// Estado de UI: empleado que se esta editando y quincena elegida en la vista.
+let editingStaffId = "";
+let payrollPeriod = "";
+
+// Alta/edicion de empleado (registro fijo). Si viene staffId, actualiza.
+function addStaff(data) {
+  const name = (data.name || "").trim();
+  if (!name) return showToast("Escribe el nombre del empleado");
+  const fields = {
+    name,
+    puesto: (data.puesto || "Otro").trim(),
+    branch: branchScopeValues.includes(data.branch) && data.branch !== "all" ? data.branch : (branchOptions[0]?.id || ""),
+    cedula: (data.cedula || "").trim(),
+    cuenta: (data.cuenta || "").trim(),
+    salarioBase: Number(data.salarioBase || 0),
+    comisionRate: Number(data.comisionRate || 0),
+    active: true
+  };
+  const editing = (data.staffId || editingStaffId || "").trim();
+  if (editing) {
+    const record = staffList().find((item) => item.id === editing);
+    if (record) {
+      Object.assign(record, fields, { active: record.active !== false });
+      editingStaffId = "";
+      persistAndRender("Empleado actualizado");
+      return;
+    }
+  }
+  state.staff.push({ id: nextId("EMP", state.staff), ...fields });
+  editingStaffId = "";
+  persistAndRender("Empleado agregado");
+}
+
+function startEditStaff(id) {
+  editingStaffId = id;
+  renderView();
+}
+
+function toggleStaffActive(id) {
+  const record = staffList().find((item) => item.id === id);
+  if (!record) return;
+  record.active = record.active === false;
+  persistAndRender(record.active ? "Empleado reactivado" : "Empleado pausado");
+}
+
+function removeStaff(id) {
+  const record = staffList().find((item) => item.id === id);
+  if (!record) return;
+  if (!confirm(`¿Eliminar a ${record.name} del registro de personal? Sus quincenas guardadas se conservan.`)) return;
+  state.staff = staffList().filter((item) => item.id !== id);
+  if (editingStaffId === id) editingStaffId = "";
+  persistAndRender("Empleado eliminado");
+}
+
+// Fija un ajuste de la quincena (bonos, feriados, horas, otros rebajos, estado).
+// Crea la fila si no existia. Todo lo demas (comision, CCSS, total) se recalcula.
+function setPayrollField(worker, period, field, rawValue) {
+  const numericFields = ["bonos", "feriadoDias", "horasExtra", "horasRebajo", "incapacidadDias", "otrosRebajos", "comisionManual"];
+  let run = payrollRun(worker, period);
+  if (!run) {
+    run = { id: nextId("COM", state.commissions), worker, period, status: "Pendiente" };
+    state.commissions.push(run);
+  }
+  if (field === "comisionManual" && String(rawValue).trim() === "") {
+    delete run.comisionManual; // vacio = volver al calculo automatico
+  } else if (numericFields.includes(field)) {
+    run[field] = Number(rawValue || 0);
+  } else {
+    run[field] = rawValue;
+  }
+  saveState();
+  renderView();
+}
+
+// Marca la quincena de una persona como Pagada / Pendiente.
+function setPayrollStatus(worker, period, status) {
+  let run = payrollRun(worker, period);
+  if (!run) {
+    run = { id: nextId("COM", state.commissions), worker, period, status };
+    state.commissions.push(run);
+  } else {
+    run.status = status;
+  }
+  persistAndRender(status === "Pagada" ? "Quincena marcada como pagada" : "Quincena marcada como pendiente");
+}
+
+function exportPayroll(period) {
+  const quote = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
+  const header = ["Nombre", "Puesto", "Sucursal", "Cedula", "Cuenta", "Salario base", "Quincenal", "Feriado", "Extra", "Rebajo", "Incapacidad", "Bonos", "Comision", "Total salario", "CCSS", "Otros rebajos", "Total a pagar", "Estado"];
+  const lines = [header.map(quote).join(",")];
+  activeStaff().forEach((staff) => {
+    const run = payrollRun(staff.name, period);
+    const c = computePayroll(staff, run, period);
+    lines.push(
+      [
+        staff.name, staff.puesto, branchLabel(staff.branch), staff.cedula, staff.cuenta,
+        c.base, Math.round(c.quincenal), Math.round(c.feriado), Math.round(c.extra), Math.round(c.rebajo),
+        Math.round(c.incapacidad), c.bonos, c.comision, Math.round(c.totalSalario), Math.round(c.ccss),
+        c.otrosRebajos, Math.round(c.totalPagar), run?.status || "Pendiente"
+      ]
+        .map(quote)
+        .join(",")
+    );
   });
-  persistAndRender("Comision registrada");
+  downloadFile(`chic-co-planilla-${period}.csv`, "﻿" + lines.join("\n"), "text/csv;charset=utf-8");
+  showToast("Planilla exportada");
 }
 
 function addBenefit(data) {
@@ -1821,22 +2023,35 @@ const viewRenderers = {
   },
 
   planilla() {
-    const month = currentMonthISO();
-    const commissions = state.commissions || [];
     const benefits = state.benefits || [];
     const vacations = state.vacations || [];
+    const period = payrollPeriod || currentQuincena();
+    const staff = activeStaff();
 
-    const monthCommissions = commissions.filter((item) => String(item.period || "").slice(0, 7) === month);
-    const totalComisiones = monthCommissions.reduce((sum, item) => sum + payrollTotal(item), 0);
-    const monthBenefits = benefits.filter((item) => String(item.date || "").slice(0, 7) === month);
-    const totalBeneficios = monthBenefits.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-    const vacacionesPendientes = vacations.filter((item) => item.status !== "Tomada").length;
+    const canEdit = canWrite("planilla");
+    const statusOptions = (list, selected) => list.map((value) => ({ value, label: value, selected: value === selected }));
+    const delBtn = (kind, id) => `<button class="row-action is-warning" type="button" data-payroll-del="${kind}:${escapeHtml(id)}">Eliminar</button>`;
+
+    // Totales de la quincena.
+    const totals = staff.reduce(
+      (acc, person) => {
+        const c = computePayroll(person, payrollRun(person.name, period), period);
+        acc.totalPagar += c.totalPagar;
+        acc.totalSalario += c.totalSalario;
+        acc.ccss += c.ccss;
+        acc.comision += c.comision;
+        const run = payrollRun(person.name, period);
+        if ((run?.status || "Pendiente") !== "Pagada") acc.pendientes += 1;
+        return acc;
+      },
+      { totalPagar: 0, totalSalario: 0, ccss: 0, comision: 0, pendientes: 0 }
+    );
 
     const kpis = [
-      ["Planilla del mes", money(totalComisiones)],
-      ["Beneficios del mes", money(totalBeneficios)],
-      ["Vacaciones activas", String(vacacionesPendientes)],
-      ["Personal en planilla", String(new Set(commissions.map((item) => item.worker)).size)]
+      ["Total a pagar (quincena)", money(totals.totalPagar)],
+      ["Comisiones (quincena)", money(totals.comision)],
+      ["Empleados activos", String(staff.length)],
+      ["Pendientes de pago", String(totals.pendientes)]
     ]
       .map(
         ([label, value]) => `
@@ -1847,41 +2062,133 @@ const viewRenderers = {
       )
       .join("");
 
-    const delBtn = (kind, id) => `<button class="row-action is-warning" type="button" data-payroll-del="${kind}:${escapeHtml(id)}">Eliminar</button>`;
-    const statusOptions = (list, selected) => list.map((value) => ({ value, label: value, selected: value === selected }));
+    /* --- Registro de empleados --- */
+    const editing = editingStaffId ? staffList().find((item) => item.id === editingStaffId) : null;
+    const branchStaffOptions = branchOptions.map((b) => ({ value: b.id, label: b.label, selected: editing ? editing.branch === b.id : false }));
+    const puestoSelOptions = puestoOptions.map((p) => ({ value: p, label: p, selected: editing ? editing.puesto === p : false }));
+    const staffForm = `
+      <form class="data-form payroll-form" data-form="staff" autocomplete="off">
+        <input type="hidden" name="staffId" value="${escapeHtml(editing?.id || "")}" />
+        <div class="form-grid">
+          ${inputField("Nombre completo", "name", "text", editing?.name || "", "required")}
+          ${selectField("Puesto", "puesto", puestoSelOptions, editing?.puesto || "Estilista")}
+          ${selectField("Sucursal", "branch", branchStaffOptions, editing?.branch || branchOptions[0]?.id)}
+          ${inputField("Cedula", "cedula", "text", editing?.cedula || "")}
+          ${inputField("Cuenta bancaria (IBAN)", "cuenta", "text", editing?.cuenta || "")}
+          ${inputField("Salario base mensual", "salarioBase", "number", editing?.salarioBase ?? 0, "min='0' step='1000'")}
+          ${inputField("Comision % sobre ventas", "comisionRate", "number", editing?.comisionRate ?? 0, "min='0' step='0.5'")}
+        </div>
+        <div class="payroll-form-actions">
+          <button class="primary-action" type="submit">${editing ? "Guardar cambios" : "Agregar empleado"}</button>
+          ${editing ? `<button class="secondary-action" type="button" data-staff-cancel>Cancelar</button>` : ""}
+        </div>
+      </form>`;
 
-    /* --- Comisiones --- */
-    const commissionRows = commissions.length
-      ? commissions
+    const staffRows = staff.length || staffList().length
+      ? staffList()
           .map(
             (item) => `
-        <tr>
-          <td><strong>${escapeHtml(item.worker)}</strong></td>
-          <td>${escapeHtml(item.period)}</td>
-          <td class="dash-num">${money(item.baseSalary)}</td>
-          <td class="dash-num">${money(item.sales)}</td>
-          <td class="dash-num">${escapeHtml(item.rate)}%</td>
-          <td class="dash-num">${money(payrollCommission(item))}</td>
-          <td class="dash-num"><strong>${money(payrollTotal(item))}</strong></td>
-          <td>${statusBadge(item.status)}</td>
-          <td>${delBtn("commission", item.id)}</td>
+        <tr class="${item.active === false ? "is-muted-row" : ""}">
+          <td><strong>${escapeHtml(item.name)}</strong>${item.active === false ? ' <span class="dash-muted">(pausado)</span>' : ""}</td>
+          <td>${escapeHtml(item.puesto || "")}</td>
+          <td>${escapeHtml(branchLabel(item.branch))}</td>
+          <td class="dash-num">${money(item.salarioBase)}</td>
+          <td class="dash-num">${escapeHtml(item.comisionRate || 0)}%</td>
+          <td>${escapeHtml(item.cuenta || "")}</td>
+          <td>
+            <div class="inline-actions">
+              <button class="row-action" type="button" data-staff-edit="${escapeHtml(item.id)}">Editar</button>
+              <button class="row-action is-muted" type="button" data-staff-toggle="${escapeHtml(item.id)}">${item.active === false ? "Activar" : "Pausar"}</button>
+              <button class="row-action is-warning" type="button" data-staff-del="${escapeHtml(item.id)}">Eliminar</button>
+            </div>
+          </td>
         </tr>`
           )
           .join("")
-      : `<tr><td colspan="9"><p class="dash-empty">Aun no hay comisiones registradas.</p></td></tr>`;
+      : `<tr><td colspan="7"><p class="dash-empty">Aun no hay empleados. Agrega al personal para armar la planilla.</p></td></tr>`;
 
-    const commissionForm = `
-      <form class="data-form payroll-form" data-form="commission" autocomplete="off">
-        <div class="form-grid">
-          ${selectField("Persona", "worker", staffOptions(), "", "required")}
-          ${inputField("Periodo", "period", "month", month, "required")}
-          ${inputField("Salario base", "baseSalary", "number", "0", "min='0' step='100'")}
-          ${inputField("Ventas del periodo", "sales", "number", "0", "min='0' step='100'")}
-          ${inputField("Comision %", "rate", "number", "0", "min='0' step='0.5'")}
-          ${selectField("Estado", "status", statusOptions(["Pendiente", "Pagada"], "Pendiente"), "Pendiente")}
+    /* --- Planilla quincenal (todo calculado) --- */
+    const quincenaSel = quincenaOptions(10)
+      .map((q) => `<option value="${escapeHtml(q.value)}"${q.value === period ? " selected" : ""}>${escapeHtml(q.label)}</option>`)
+      .join("");
+
+    const numInput = (item, field, value, step = "1") =>
+      `<input class="pay-cell" type="number" min="0" step="${step}" value="${value ? escapeHtml(value) : ""}" data-pay-emp="${escapeHtml(item.id)}" data-pay-field="${field}" ${canEdit ? "" : "disabled"} />`;
+
+    const payrollRows = staff.length
+      ? staff
+          .map((item) => {
+            const run = payrollRun(item.name, period);
+            const c = computePayroll(item, run, period);
+            const paid = (run?.status || "Pendiente") === "Pagada";
+            return `
+        <tr class="${paid ? "is-paid-row" : ""}">
+          <td><strong>${escapeHtml(item.name)}</strong><br /><span class="dash-muted">${escapeHtml(item.puesto || "")} · ${escapeHtml(branchLabel(item.branch))}</span></td>
+          <td class="dash-num">${money(Math.round(c.quincenal))}</td>
+          <td class="pay-input">${numInput(item, "feriadoDias", run?.feriadoDias, "1")}</td>
+          <td class="pay-input">${numInput(item, "horasExtra", run?.horasExtra, "0.5")}</td>
+          <td class="pay-input">${numInput(item, "horasRebajo", run?.horasRebajo, "0.5")}</td>
+          <td class="pay-input">${numInput(item, "incapacidadDias", run?.incapacidadDias, "0.5")}</td>
+          <td class="pay-input">${numInput(item, "bonos", run?.bonos, "500")}</td>
+          <td class="pay-input"><input class="pay-cell" type="number" min="0" step="500" placeholder="${Math.round(c.comision)}" value="${run?.comisionManual != null && run?.comisionManual !== "" ? escapeHtml(run.comisionManual) : ""}" data-pay-emp="${escapeHtml(item.id)}" data-pay-field="comisionManual" ${canEdit ? "" : "disabled"} /></td>
+          <td class="dash-num">${money(Math.round(c.totalSalario))}</td>
+          <td class="dash-num dash-muted">${money(Math.round(c.ccss))}</td>
+          <td class="pay-input">${numInput(item, "otrosRebajos", run?.otrosRebajos, "500")}</td>
+          <td class="dash-num"><strong>${money(Math.round(c.totalPagar))}</strong></td>
+          <td>
+            <button class="row-action ${paid ? "is-muted" : ""}" type="button" data-pay-status="${escapeHtml(item.id)}:${paid ? "Pendiente" : "Pagada"}" ${canEdit ? "" : "disabled"}>${paid ? "Pagado ✓" : "Marcar pagado"}</button>
+          </td>
+        </tr>`;
+          })
+          .join("")
+      : `<tr><td colspan="13"><p class="dash-empty">Agrega empleados arriba para ver la planilla de la quincena.</p></td></tr>`;
+
+    const totalsRow = staff.length
+      ? `<tr class="pay-totals">
+          <td><strong>Totales</strong></td>
+          <td colspan="7"></td>
+          <td class="dash-num"><strong>${money(Math.round(totals.totalSalario))}</strong></td>
+          <td class="dash-num"><strong>${money(Math.round(totals.ccss))}</strong></td>
+          <td></td>
+          <td class="dash-num"><strong>${money(Math.round(totals.totalPagar))}</strong></td>
+          <td></td>
+        </tr>`
+      : "";
+
+    const payrollSection = `
+      <section class="dash-panel dash-panel-wide payroll-panel">
+        <div class="payroll-head">
+          <div>
+            <h3>Planilla de la quincena</h3>
+            <p class="payroll-sub">Ventas, comision, CCSS (10.83%) y total a pagar se calculan solos. Solo llenas feriados, horas y ajustes.</p>
+          </div>
+          <div class="payroll-controls">
+            <label class="field"><span class="visually-hidden">Quincena</span><select data-payroll-period>${quincenaSel}</select></label>
+            <button type="button" class="dash-export" data-payroll-export>Exportar para el banco</button>
+          </div>
         </div>
-        <button class="primary-action" type="submit">Registrar comision</button>
-      </form>`;
+        <div class="table-wrap">
+          <table class="dash-table payroll-table">
+            <thead><tr>
+              <th>Empleado</th><th class="dash-num">Quincenal</th><th>Feriado d.</th><th>H. extra</th><th>H. rebajo</th><th>Incap. d.</th><th>Bonos ₡</th><th>Comision ₡</th><th class="dash-num">Total salario</th><th class="dash-num">CCSS</th><th>Otros reb. ₡</th><th class="dash-num">Total a pagar</th><th></th>
+            </tr></thead>
+            <tbody>${payrollRows}${totalsRow}</tbody>
+          </table>
+        </div>
+      </section>`;
+
+    const staffPanel = `
+      <section class="dash-panel dash-panel-wide payroll-panel">
+        <h3>Empleados</h3>
+        <p class="payroll-sub">Datos fijos de cada persona: puesto, sucursal, cedula, cuenta, salario base y % de comision.</p>
+        ${canEdit ? staffForm : ""}
+        <div class="table-wrap">
+          <table class="dash-table">
+            <thead><tr><th>Nombre</th><th>Puesto</th><th>Sucursal</th><th class="dash-num">Salario base</th><th>Comision</th><th>Cuenta</th><th></th></tr></thead>
+            <tbody>${staffRows}</tbody>
+          </table>
+        </div>
+      </section>`;
 
     /* --- Beneficios --- */
     const benefitRows = benefits.length
@@ -1960,20 +2267,15 @@ const viewRenderers = {
         <div class="dash-head">
           <div>
             <h2>Planilla y RRHH</h2>
-            <p>Comisiones, beneficios y vacaciones del personal. Acceso restringido por el super usuario.</p>
+            <p>Planilla quincenal calculada, empleados, beneficios y vacaciones. Acceso restringido por el super usuario.</p>
           </div>
         </div>
         <div class="dash-kpis">${kpis}</div>
+        ${payrollSection}
+        ${staffPanel}
         ${panel(
-          "Comisiones",
-          "Salario base + comision sobre ventas por periodo.",
-          commissionForm,
-          ["Persona", "Periodo", "Base", "Ventas", "%", "Comision", "Total", "Estado", ""],
-          commissionRows
-        )}
-        ${panel(
-          "Beneficios utilizados",
-          "Aguinaldo, bonos, seguros, capacitaciones y adelantos.",
+          "Beneficios y aguinaldo",
+          "Aguinaldo, bonos, seguros, capacitaciones y adelantos por persona.",
           benefitForm,
           ["Persona", "Tipo", "Monto", "Fecha", "Nota", ""],
           benefitRows
@@ -3187,7 +3489,7 @@ function handleSubmit(event) {
     appointment: addAppointment,
     invoice: addInvoice,
     user: addUser,
-    commission: addCommission,
+    staff: addStaff,
     benefit: addBenefit,
     vacation: addVacation
   };
@@ -3549,6 +3851,44 @@ function handleRowActions(event) {
     if (!requireWrite("planilla")) return;
     const [kind, id] = payrollDelButton.dataset.payrollDel.split(":");
     removePayrollRecord(kind, id);
+    return;
+  }
+
+  const staffEditBtn = event.target.closest("[data-staff-edit]");
+  if (staffEditBtn) {
+    if (!requireWrite("planilla")) return;
+    startEditStaff(staffEditBtn.dataset.staffEdit);
+    return;
+  }
+  const staffToggleBtn = event.target.closest("[data-staff-toggle]");
+  if (staffToggleBtn) {
+    if (!requireWrite("planilla")) return;
+    toggleStaffActive(staffToggleBtn.dataset.staffToggle);
+    return;
+  }
+  const staffDelBtn = event.target.closest("[data-staff-del]");
+  if (staffDelBtn) {
+    if (!requireWrite("planilla")) return;
+    removeStaff(staffDelBtn.dataset.staffDel);
+    return;
+  }
+  if (event.target.closest("[data-staff-cancel]")) {
+    event.preventDefault();
+    editingStaffId = "";
+    renderView();
+    return;
+  }
+  const payStatusBtn = event.target.closest("[data-pay-status]");
+  if (payStatusBtn) {
+    if (!requireWrite("planilla")) return;
+    const [empId, status] = payStatusBtn.dataset.payStatus.split(":");
+    const person = staffList().find((item) => item.id === empId);
+    if (person) setPayrollStatus(person.name, payrollPeriod || currentQuincena(), status);
+    return;
+  }
+  if (event.target.closest("[data-payroll-export]")) {
+    event.preventDefault();
+    exportPayroll(payrollPeriod || currentQuincena());
     return;
   }
 
@@ -4235,6 +4575,21 @@ document.addEventListener("change", (event) => {
   if (pagosBranchSelect) {
     pagosBranch = pagosBranchSelect.value;
     renderView();
+  }
+
+  const payPeriodSelect = event.target.closest("[data-payroll-period]");
+  if (payPeriodSelect) {
+    payrollPeriod = payPeriodSelect.value;
+    renderView();
+    return;
+  }
+
+  const payFieldInput = event.target.closest("[data-pay-field]");
+  if (payFieldInput) {
+    if (!requireWrite("planilla")) return;
+    const person = staffList().find((item) => item.id === payFieldInput.dataset.payEmp);
+    if (person) setPayrollField(person.name, payrollPeriod || currentQuincena(), payFieldInput.dataset.payField, payFieldInput.value);
+    return;
   }
 });
 
