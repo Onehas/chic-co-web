@@ -107,27 +107,34 @@ const branchScopeValues = ["all", ...branchOptions.map((branch) => branch.id)];
 // Colecciones de planilla / RRHH en el nivel superior del estado.
 const payrollKeys = ["commissions", "benefits", "vacations"];
 
+// Categorias de especialista: cada persona atiende solo su tipo de servicio.
+const specialistCategories = [
+  { id: "estilista", label: "Estilista" },
+  { id: "esteticista", label: "Esteticista" },
+  { id: "manicurista", label: "Manicurista" }
+];
+
 const procedureSpecialists = [
-  { name: "Andrea Morales", focus: "Faciales" },
-  { name: "Paola Jimenez", focus: "Color" },
-  { name: "Camila Soto", focus: "Cabello" },
-  { name: "Natalia Vargas", focus: "Laser" },
-  { name: "Sofia Marin", focus: "Unas" },
-  { name: "Valeria Campos", focus: "Depilacion" },
-  { name: "Daniela Rojas", focus: "Masajes" },
-  { name: "Mariana Arias", focus: "Cejas" },
-  { name: "Laura Quiros", focus: "Tratamientos" },
-  { name: "Fernanda Solis", focus: "Maquillaje" },
-  { name: "Karla Mendez", focus: "Cabello" },
-  { name: "Melissa Castro", focus: "Faciales" },
-  { name: "Gabriela Mora", focus: "Unas" },
-  { name: "Isabel Pineda", focus: "Laser" },
-  { name: "Lucia Herrera", focus: "Color" },
-  { name: "Monica Salazar", focus: "Depilacion" },
-  { name: "Rebeca Chacon", focus: "Masajes" },
-  { name: "Elena Navarro", focus: "Cejas" },
-  { name: "Cristina Vega", focus: "Tratamientos" },
-  { name: "Jimena Fuentes", focus: "Maquillaje" }
+  { name: "Andrea Morales", focus: "Faciales", category: "esteticista" },
+  { name: "Paola Jimenez", focus: "Color", category: "estilista" },
+  { name: "Camila Soto", focus: "Cabello", category: "estilista" },
+  { name: "Natalia Vargas", focus: "Laser", category: "esteticista" },
+  { name: "Sofia Marin", focus: "Unas", category: "manicurista" },
+  { name: "Valeria Campos", focus: "Depilacion", category: "esteticista" },
+  { name: "Daniela Rojas", focus: "Masajes", category: "esteticista" },
+  { name: "Mariana Arias", focus: "Cejas", category: "estilista" },
+  { name: "Laura Quiros", focus: "Tratamientos", category: "esteticista" },
+  { name: "Fernanda Solis", focus: "Maquillaje", category: "estilista" },
+  { name: "Karla Mendez", focus: "Cabello", category: "estilista" },
+  { name: "Melissa Castro", focus: "Faciales", category: "esteticista" },
+  { name: "Gabriela Mora", focus: "Unas", category: "manicurista" },
+  { name: "Isabel Pineda", focus: "Laser", category: "esteticista" },
+  { name: "Lucia Herrera", focus: "Color", category: "estilista" },
+  { name: "Monica Salazar", focus: "Depilacion", category: "esteticista" },
+  { name: "Rebeca Chacon", focus: "Masajes", category: "esteticista" },
+  { name: "Elena Navarro", focus: "Cejas", category: "estilista" },
+  { name: "Cristina Vega", focus: "Tratamientos", category: "esteticista" },
+  { name: "Jimena Fuentes", focus: "Maquillaje", category: "estilista" }
 ];
 
 const monthNames = [
@@ -426,7 +433,16 @@ function normalizeStateSnapshot(snapshot) {
   const savedBranches = parsed.branches || {};
   const legacyRohrmoserData = pickBranchData(merged);
   merged.branches = branchOptions.reduce((branches, branch) => {
-    const fallback = branch.id === "rohrmoser" && !parsed.branches ? legacyRohrmoserData : fallbackBranches[branch.id];
+    // Cuando el servidor ya envio sucursales (estado real), una sucursal ausente
+    // es una sede que ESTA CUENTA no puede ver (esta atada a otra): se rellena
+    // VACIA, nunca con datos de demostracion. Sembrarla con la demo generaba
+    // registros fantasma en el navegador y un sync forzado en cada inicio de
+    // sesion. La semilla solo aplica en una instalacion sin estado guardado.
+    const fallback = parsed.branches
+      ? emptyBranchData()
+      : branch.id === "rohrmoser"
+        ? legacyRohrmoserData
+        : fallbackBranches[branch.id];
     branches[branch.id] = normalizeBranchData(savedBranches[branch.id], fallback);
     return branches;
   }, {});

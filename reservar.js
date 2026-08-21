@@ -151,9 +151,17 @@
 
   function fillSpecialists() {
     if (!el.specialistGroup) return;
-    const specialists = branch()?.specialists || [];
-    // Si la especialista elegida ya no atiende en esta sucursal, se limpia.
-    if (sel.specialist && !specialists.includes(sel.specialist)) {
+    const all = branch()?.specialists || [];
+    // Cada servicio lo atiende un tipo de especialista (estilista/esteticista/
+    // manicurista). Si el servicio elegido tiene tipo, solo se ofrecen las
+    // especialistas de ese tipo; si no, se ofrecen todas.
+    const wantCategory = procedure()?.category || "";
+    const specialists = wantCategory ? all.filter((item) => item.category === wantCategory) : all;
+    const names = specialists.map((item) => item.name);
+
+    // Si la especialista elegida ya no puede hacer el servicio (o no atiende en
+    // esta sucursal), se limpia y se recalculan los horarios.
+    if (sel.specialist && !names.includes(sel.specialist)) {
       sel.specialist = "";
       sel.time = "";
     }
@@ -168,7 +176,7 @@
     };
     el.specialistGroup.innerHTML = [
       option("", "Sin preferencia"),
-      ...specialists.map((name) => option(name, name))
+      ...names.map((name) => option(name, name))
     ].join("");
   }
 
@@ -484,7 +492,10 @@
       s.classList.toggle("is-selected", active);
       s.setAttribute("aria-checked", String(active));
     });
-    // Cambiar de servicio cambia la duracion: los horarios se recalculan.
+    // Cambiar de servicio cambia el tipo de especialista que lo atiende: se
+    // vuelve a armar la lista de especialistas filtrada por ese servicio.
+    fillSpecialists();
+    // Cambiar de servicio tambien cambia la duracion: los horarios se recalculan.
     if (sel.date) loadSlots();
     else refresh();
   });

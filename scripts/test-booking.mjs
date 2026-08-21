@@ -112,8 +112,12 @@ assert.ok(!withPending.slots.includes("12:00"), "las solicitudes pendientes apar
 
 /* --- Disponibilidad por especialista ------------------------------------ */
 
-// La sucursal expone su lista de especialistas.
-assert.deepEqual(booking.specialistsForBranch(baseState, "rohrmoser"), ["A", "B"], "lista de especialistas de la sede");
+// La sucursal expone su lista de especialistas (objetos {name, category}).
+assert.deepEqual(
+  booking.specialistsForBranch(baseState, "rohrmoser").map((s) => s.name),
+  ["A", "B"],
+  "lista de especialistas de la sede"
+);
 assert.ok(booking.isKnownSpecialist(baseState, "rohrmoser", "A"), "A si atiende aqui");
 assert.ok(booking.isKnownSpecialist(baseState, "rohrmoser", ""), "sin preferencia siempre vale");
 assert.ok(!booking.isKnownSpecialist(baseState, "rohrmoser", "Z"), "Z no atiende aqui");
@@ -159,6 +163,42 @@ const withSpecialist = await store.createRequest({
 assert.equal(withSpecialist.specialist, "A", "la solicitud guarda la especialista elegida");
 const fetched = await store.getRequest(withSpecialist.id);
 assert.equal(fetched.specialist, "A", "y la devuelve al leerla");
+
+/* --- Categorias: cada especialista hace solo su tipo de servicio --------- */
+
+const catState = {
+  currentBranchId: "rohrmoser",
+  branches: {
+    rohrmoser: {
+      procedures: [
+        { id: "P-FAC", name: "Facial", duration: 60, price: 1, category: "Facial" },
+        { id: "P-PELO", name: "Corte", duration: 30, price: 1, category: "Cabello" },
+        { id: "P-UNA", name: "Manicure", duration: 30, price: 1, category: "Unas" }
+      ],
+      appointments: [],
+      specialists: [
+        { name: "Esteticista Ana", category: "esteticista" },
+        { name: "Estilista Bea", category: "estilista" },
+        { name: "Manicurista Coty", category: "manicurista" }
+      ]
+    }
+  }
+};
+const procs = booking.bookableProcedures(catState, "rohrmoser");
+const facial = procs.find((p) => p.id === "P-FAC");
+const corte = procs.find((p) => p.id === "P-PELO");
+const mani = procs.find((p) => p.id === "P-UNA");
+assert.equal(facial.category, "esteticista", "Facial -> esteticista");
+assert.equal(corte.category, "estilista", "Cabello -> estilista");
+assert.equal(mani.category, "manicurista", "Unas -> manicurista");
+
+assert.ok(booking.specialistDoesProcedure(catState, "rohrmoser", "Esteticista Ana", facial), "la esteticista hace faciales");
+assert.ok(!booking.specialistDoesProcedure(catState, "rohrmoser", "Esteticista Ana", corte), "la esteticista NO hace cortes");
+assert.ok(booking.specialistDoesProcedure(catState, "rohrmoser", "Estilista Bea", corte), "la estilista hace cortes");
+assert.ok(booking.specialistDoesProcedure(catState, "rohrmoser", "Manicurista Coty", mani), "la manicurista hace manicure");
+assert.ok(!booking.specialistDoesProcedure(catState, "rohrmoser", "Manicurista Coty", facial), "la manicurista NO hace faciales");
+// Sin preferencia siempre pasa.
+assert.ok(booking.specialistDoesProcedure(catState, "rohrmoser", "", facial), "sin preferencia siempre vale");
 
 /* --- Ultima validacion antes de guardar --------------------------------- */
 

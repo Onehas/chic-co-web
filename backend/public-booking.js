@@ -76,6 +76,33 @@ function branchData(state, branchId) {
   return state?.branches?.[branchId] || {};
 }
 
+// Mapa de la categoria de servicio (la que ya elige el salon al crear el
+// procedimiento) al tipo de especialista que lo atiende. Si el procedimiento ya
+// trae directamente un tipo de especialista, se respeta.
+const SERVICE_TO_SPECIALIST = {
+  facial: "esteticista",
+  faciales: "esteticista",
+  cabello: "estilista",
+  color: "estilista",
+  laser: "esteticista",
+  "láser": "esteticista",
+  corporal: "esteticista",
+  depilacion: "esteticista",
+  "depilación": "esteticista",
+  masajes: "esteticista",
+  tratamientos: "esteticista",
+  cejas: "estilista",
+  maquillaje: "estilista",
+  unas: "manicurista",
+  "uñas": "manicurista"
+};
+
+function procedureSpecialistCategory(rawCategory) {
+  const clean = String(rawCategory || "").trim().toLowerCase();
+  if (SPECIALIST_CATEGORIES.includes(clean)) return clean;
+  return SERVICE_TO_SPECIALIST[clean] || "";
+}
+
 // Los servicios que se muestran en la pagina publica. Un procedimiento sin
 // precio o sin duracion no se ofrece: la clienta no puede decidir a ciegas y
 // el hueco quedaria mal calculado.
@@ -89,7 +116,11 @@ function bookableProcedures(state, branchId) {
       name: String(procedure.name),
       duration: Math.min(480, Math.max(15, Number(procedure.duration) || 60)),
       price: Number(procedure.price) || 0,
-      area: String(procedure.area || "")
+      area: String(procedure.area || ""),
+      // Tipo de especialista que atiende este servicio, derivado de la categoria
+      // del procedimiento (Facial/Cabello/Laser/Corporal/Unas -> esteticista/
+      // estilista/manicurista). "" = lo puede hacer cualquiera.
+      category: procedureSpecialistCategory(procedure.category)
     }));
 }
 
@@ -98,25 +129,76 @@ function bookableProcedures(state, branchId) {
 // para que una cita confirmada quede asignada a la misma persona y su hueco se
 // respete en las dos vistas. Si una sucursal define su propia lista en
 // `state.branches[id].specialists`, esa manda.
+// Categorias de especialista. Cada persona atiende solo su tipo de servicio.
+const SPECIALIST_CATEGORIES = ["estilista", "esteticista", "manicurista"];
+
+// Roster por defecto con su categoria. Los nombres deben coincidir con la agenda
+// interna (app.js: procedureSpecialists) para que una cita confirmada quede
+// asignada a la misma persona. Una sucursal puede definir su propia lista en
+// state.branches[id].specialists (objetos {name, category}).
 const DEFAULT_SPECIALISTS = [
-  "Andrea Morales", "Paola Jimenez", "Camila Soto", "Natalia Vargas", "Sofia Marin",
-  "Valeria Campos", "Daniela Rojas", "Mariana Arias", "Laura Quiros", "Fernanda Solis",
-  "Karla Mendez", "Melissa Castro", "Gabriela Mora", "Isabel Pineda", "Lucia Herrera",
-  "Monica Salazar", "Rebeca Chacon", "Elena Navarro", "Cristina Vega", "Jimena Fuentes"
+  { name: "Andrea Morales", category: "esteticista" },
+  { name: "Paola Jimenez", category: "estilista" },
+  { name: "Camila Soto", category: "estilista" },
+  { name: "Natalia Vargas", category: "esteticista" },
+  { name: "Sofia Marin", category: "manicurista" },
+  { name: "Valeria Campos", category: "esteticista" },
+  { name: "Daniela Rojas", category: "esteticista" },
+  { name: "Mariana Arias", category: "estilista" },
+  { name: "Laura Quiros", category: "esteticista" },
+  { name: "Fernanda Solis", category: "estilista" },
+  { name: "Karla Mendez", category: "estilista" },
+  { name: "Melissa Castro", category: "esteticista" },
+  { name: "Gabriela Mora", category: "manicurista" },
+  { name: "Isabel Pineda", category: "esteticista" },
+  { name: "Lucia Herrera", category: "estilista" },
+  { name: "Monica Salazar", category: "esteticista" },
+  { name: "Rebeca Chacon", category: "esteticista" },
+  { name: "Elena Navarro", category: "estilista" },
+  { name: "Cristina Vega", category: "esteticista" },
+  { name: "Jimena Fuentes", category: "estilista" }
 ];
 
+function normalizeCategory(value) {
+  const clean = String(value || "").trim().toLowerCase();
+  return SPECIALIST_CATEGORIES.includes(clean) ? clean : "";
+}
+
+// Devuelve objetos {name, category}. Sin categoria valida quedan como "" (que la
+// pagina trata como "atiende cualquier servicio").
 function specialistsForBranch(state, branchId) {
   const raw = branchData(state, branchId).specialists;
-  const source = Array.isArray(raw) && raw.length
-    ? raw.map((item) => (typeof item === "string" ? item : item?.name)).filter(Boolean)
-    : DEFAULT_SPECIALISTS;
-  return [...new Set(source.map((name) => String(name).trim()).filter(Boolean))];
+  const source = Array.isArray(raw) && raw.length ? raw : DEFAULT_SPECIALISTS;
+  const seen = new Set();
+  const list = [];
+  source.forEach((item) => {
+    const name = String(typeof item === "string" ? item : item?.name || "").trim();
+    if (!name || seen.has(name.toLowerCase())) return;
+    seen.add(name.toLowerCase());
+    list.push({ name, category: normalizeCategory(typeof item === "object" ? item.category : "") });
+  });
+  return list;
+}
+
+function specialistCategory(state, branchId, specialist) {
+  const want = String(specialist || "").trim().toLowerCase();
+  return specialistsForBranch(state, branchId).find((item) => item.name.toLowerCase() === want)?.category || "";
 }
 
 function isKnownSpecialist(state, branchId, specialist) {
   const want = String(specialist || "").trim().toLowerCase();
   if (!want) return true; // "sin preferencia" siempre es valido
-  return specialistsForBranch(state, branchId).some((name) => name.toLowerCase() === want);
+  return specialistsForBranch(state, branchId).some((item) => item.name.toLowerCase() === want);
+}
+
+// La especialista elegida debe poder hacer el servicio: su categoria coincide
+// con la del procedimiento. Sin preferencia siempre pasa; un servicio sin
+// categoria lo puede atender cualquiera.
+function specialistDoesProcedure(state, branchId, specialist, procedure) {
+  if (!specialist) return true;
+  const procedureCategory = normalizeCategory(procedure?.category);
+  if (!procedureCategory) return true;
+  return specialistCategory(state, branchId, specialist) === procedureCategory;
 }
 
 function bookingConfig(state, branchLabels) {
@@ -127,6 +209,7 @@ function bookingConfig(state, branchLabels) {
       procedures: bookableProcedures(state, branchId),
       specialists: specialistsForBranch(state, branchId)
     })),
+    categories: SPECIALIST_CATEGORIES,
     hours: { opens: toTime(openingMinutes), closes: toTime(closingMinutes), slotStep },
     closedWeekdays: [...closedWeekdays],
     minLeadMinutes,
@@ -283,7 +366,10 @@ module.exports = {
   localNow,
   bookableProcedures,
   specialistsForBranch,
+  specialistCategory,
+  specialistDoesProcedure,
   isKnownSpecialist,
+  SPECIALIST_CATEGORIES,
   bookingConfig,
   capacityFor,
   busyIntervals,
