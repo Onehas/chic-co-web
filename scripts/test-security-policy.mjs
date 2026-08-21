@@ -240,6 +240,27 @@ assert.equal(mintSuper[0].role, "recepcion", "un rol nuevo super creado por un n
 const superGrants = clampUserRoles([{ id: "REC", role: "super", active: true }], userTree, asSuper);
 assert.equal(superGrants[0].role, "super", "un super si puede otorgar el rol super");
 
+// Reenviar un admin/super EXISTENTE sin cambios NO lo degrada. El cliente manda
+// la lista completa en cada guardado; sin esto, un admin (que no es super) o un
+// no-super arrastraba a recepcion a todos los admin al guardar cualquier cosa.
+const keepAdmin = clampUserRoles([{ id: "ADM", role: "admin", active: true }], userTree, asAdmin);
+assert.equal(keepAdmin[0].role, "admin", "un admin reenviado sin cambios conserva su rol");
+const keepSuper = clampUserRoles([{ id: "USR-000", role: "super", active: true }], userTree, asAdmin);
+assert.equal(keepSuper[0].role, "super", "un super existente no se degrada al guardar la lista");
+
+// Aunque un no-admin tenga el permiso usuarios.write, no puede escribir la
+// coleccion `users`: no puede crear cuentas ni tocar roles/permisos de nadie.
+const uwState = baseState();
+uwState.users = [
+  { id: "USR-000", name: "Super", role: "super", active: true, passwordHash: "h", permissions: allPermissions },
+  { id: "USR-UW", name: "Recep", role: "recepcion", active: true, passwordHash: "h", permissions: { ...permissions, usuarios: { read: true, write: true } } }
+];
+const uwNext = structuredClone(uwState);
+uwNext.currentUserId = "USR-UW";
+uwNext.users.push({ id: "USR-HACK", name: "Fabricada", role: "recepcion", active: true, passwordHash: "x", permissions: allPermissions });
+const uwResult = applyWritePolicy(uwNext, uwState, { userId: "USR-UW" });
+assert.ok(!uwResult.users.some((item) => item.id === "USR-HACK"), "un no-admin con usuarios.write no puede crear cuentas");
+
 /* --- CSP: la pagina publica permite pixeles, el back-office no ----------- */
 
 const publicCsp = contentSecurityPolicy("/reservar.html");

@@ -55,6 +55,7 @@ La version online guarda los datos en Postgres y valida el login desde la API. E
 | `CHIC_STAFF_EMAILS` | Separados por coma. Reciben el aviso de cada reserva y el reporte de cierre. |
 | `CHIC_REPORT_SECRET` | Protege `POST /api/reports/daily`. Sin ella esa ruta no existe. |
 | `CHIC_REPORT_HOUR` | Hora local del reporte de cierre. Por defecto 20. |
+| `CHIC_RESET_TTL_MINUTES` | Minutos de vigencia del enlace de recuperar contrasena. Por defecto 30. |
 | `CHIC_OPENING_TIME`, `CHIC_CLOSING_TIME` | Horario que ofrece la agenda publica. Por defecto 08:30 y 19:00. |
 | `CHIC_CLOSED_WEEKDAYS` | Dias cerrados, 0 = domingo. Por defecto `0`. Vacio para abrir los siete. |
 | `CHIC_PUBLIC_CAPACITY` | Cuantas citas caben a la misma hora. Por defecto, el numero de especialistas. |

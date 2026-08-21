@@ -40,7 +40,10 @@ const dbPath = path.join(dataDir, "chic-co-db.json");
 const port = Number(process.env.PORT || 4173);
 const host = process.env.HOST || "127.0.0.1";
 const databaseUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL || "";
-const maxBodyBytes = 2 * 1024 * 1024;
+// El estado completo viaja en cada guardado. 2 MB se quedaba corto al pensar en
+// anios de historial (los ~1800 clientes reales pesan ~0,5 MB, pero las citas y
+// facturas se acumulan). 8 MB da holgura de sobra; Postgres jsonb lo aguanta.
+const maxBodyBytes = 8 * 1024 * 1024;
 const sessionTtlMs = 8 * 60 * 60 * 1000;
 const loginWindowMs = 15 * 60 * 1000;
 const maxLoginAttempts = 8;
@@ -586,6 +589,11 @@ function writableCollectionsForUser(user) {
     if (!canWriteModule(user, moduleName)) return;
     collectionNames.forEach((collectionName) => collections.add(collectionName));
   });
+  // Administrar cuentas de personal (crear usuarios, cambiar roles/permisos) es
+  // territorio de administracion. Aunque un no-admin tuviera el permiso
+  // `usuarios.write`, no puede escribir la coleccion `users`: asi no puede
+  // fabricar cuentas con permisos ni tocar los roles de nadie.
+  collections.delete("users");
   return collections;
 }
 
@@ -726,7 +734,13 @@ function clampUserRoles(nextUsers, currentState, requester) {
     if (requester && candidate.id === requester.id && current) {
       return { ...candidate, role: current.role, permissions: current.permissions };
     }
+    // Solo un super puede INTRODUCIR o ELEVAR a super/admin. Pero si el rol
+    // enviado es elevado y coincide con el ya guardado, no es una elevacion: no
+    // se toca. Sin esto, como el cliente reenvia SIEMPRE la lista completa de
+    // usuarios, cualquier guardado de un no-super (o de un admin, que tampoco es
+    // super) degradaba a recepcion a TODOS los admin/super existentes.
     if (!requesterIsSuper && elevatedRoles.has(candidate.role)) {
+      if (current && current.role === candidate.role) return candidate;
       const safeRole = current && !elevatedRoles.has(current.role) ? current.role : "recepcion";
       return { ...candidate, role: safeRole };
     }
