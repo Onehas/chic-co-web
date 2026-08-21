@@ -56,6 +56,13 @@ const rolePresets = {
   inventario: {
     label: "Inventario",
     permissions: buildPermissions(["inventario", "procedimientos"], ["inventario"])
+  },
+  contadora: {
+    label: "Contadora",
+    // Solo lectura para cuadrar numeros y exportar: inventario, facturacion y
+    // cuentas por pagar. Ademas ve el dashboard (se habilita aparte, abajo).
+    // NO puede sacar stock salvo que el super le asigne stockOutAccess.
+    permissions: buildPermissions(["inventario", "facturacion", "proveedores"], [])
   }
 };
 
@@ -520,11 +527,16 @@ function normalizeUser(user) {
   // Acceso a planilla/RRHH. El super siempre lo tiene; el resto solo si el
   // super se lo asigno. Se guarda como booleano explicito.
   const payrollAccess = role === "super" ? true : user.payrollAccess === true;
+  // Permiso de "salida de inventario": sacar stock. Solo el super lo asigna.
+  // Super y admin ya pueden por su acceso a inventario; para el resto es este
+  // flag explicito (p. ej. una contadora que solo lee inventario).
+  const stockOutAccess = user.stockOutAccess === true;
   return {
     ...user,
     role,
     branchScope,
     payrollAccess,
+    stockOutAccess,
     active: user.active !== false,
     passwordHash: user.passwordHash || fallbackPasswordHash,
     permissions: permissionModules.reduce((permissions, moduleName) => {
@@ -703,7 +715,12 @@ function showApp(userId) {
   storeStateLocally();
   document.body.classList.remove("is-login");
   document.body.classList.add("is-authenticated");
-  currentModule = canView("clientes") ? "clientes" : firstAllowedModule();
+  // La contadora entra directo al dashboard (su pantalla de numeros).
+  currentModule = canView("dashboard") && currentUser()?.role === "contadora"
+    ? "dashboard"
+    : canView("clientes")
+      ? "clientes"
+      : firstAllowedModule();
   connectRealtimeSync();
   setModule(currentModule, { silent: true });
 }
@@ -919,6 +936,9 @@ const payrollModules = new Set(["planilla"]);
 function canView(moduleName) {
   const user = currentUser();
   if (payrollModules.has(moduleName)) return hasPayrollAccess(user);
+  // El dashboard (reportes) lo ven direccion y la contadora. Los demas modulos
+  // "solo direccion" (integraciones) siguen siendo de admin.
+  if (moduleName === "dashboard") return isAdminRole(user) || user?.role === "contadora";
   if (adminOnlyModules.has(moduleName)) return isAdminRole(user);
   return Boolean(user?.active && user.permissions?.[moduleName]?.read);
 }
@@ -927,6 +947,14 @@ function canWrite(moduleName) {
   const user = currentUser();
   if (payrollModules.has(moduleName)) return hasPayrollAccess(user);
   return Boolean(user?.active && user.permissions?.[moduleName]?.write);
+}
+
+// Sacar stock ("Usar -1" / salidas de inventario). Lo puede hacer quien
+// administra inventario (encargados actuales) y quien el super habilite con
+// stockOutAccess (p. ej. la contadora). Sin esto, un no-encargado no saca stock.
+function canTakeStockOut() {
+  const user = currentUser();
+  return Boolean(user?.active && (canWrite("inventario") || user.stockOutAccess === true));
 }
 
 function firstAllowedModule() {
@@ -2848,7 +2876,7 @@ const viewRenderers = {
       .filter(matchesFilter)
       .filter((product) =>
         matchesSearch(
-          [product.name, product.category, product.supplier, product.unit, locationName(product.locationId), product.spot, isLowStock(product) ? "stock bajo alerta reponer" : "ok"],
+          [product.name, product.category, product.supplier, product.unit, product.barcode, locationName(product.locationId), product.spot, isLowStock(product) ? "stock bajo alerta reponer" : "ok"],
           search
         )
       )
@@ -2879,9 +2907,10 @@ const viewRenderers = {
             <td>${escapeHtml(product.supplier || "-")}</td>
             <td>
               <div class="inline-actions">
-                <button class="row-action" type="button" data-stock-add="${product.id}">Entrada +1</button>
-                <button class="row-action is-muted" type="button" data-stock-use="${product.id}">Usar -1</button>
-                <button class="row-action is-muted" type="button" data-product-place="${product.id}">Ubicar</button>
+                ${canWrite("inventario") ? `<button class="row-action" type="button" data-stock-add="${product.id}">Entrada +1</button>` : ""}
+                ${canTakeStockOut() ? `<button class="row-action is-muted" type="button" data-stock-use="${product.id}">Usar -1</button>` : ""}
+                ${canWrite("inventario") ? `<button class="row-action is-muted" type="button" data-product-place="${product.id}">Ubicar</button>` : ""}
+                ${!canWrite("inventario") && !canTakeStockOut() ? `<span class="muted-cell">Solo lectura</span>` : ""}
               </div>
             </td>
           </tr>
@@ -2898,13 +2927,19 @@ const viewRenderers = {
       }</button>`;
 
     const filters = `
-      <div class="filter-bar" role="group" aria-label="Filtrar productos">
-        ${chip("all", "Todos", all.length)}
-        ${chip("low", "Bajo minimo", lowCount)}
-        ${chip("unplaced", "Sin ubicacion", unplacedCount)}
-        ${locationList()
-          .map((location) => chip(`loc:${location.id}`, location.name, productsAtLocation(location.id).length))
-          .join("")}
+      <div class="inventory-bar">
+        <div class="filter-bar" role="group" aria-label="Filtrar productos">
+          ${chip("all", "Todos", all.length)}
+          ${chip("low", "Bajo minimo", lowCount)}
+          ${chip("unplaced", "Sin ubicacion", unplacedCount)}
+          ${locationList()
+            .map((location) => chip(`loc:${location.id}`, location.name, productsAtLocation(location.id).length))
+            .join("")}
+        </div>
+        <button type="button" class="secondary-action scan-lookup-btn" data-scan-lookup aria-label="Escanear codigo de barras de un producto">
+          <svg viewBox="0 0 24 24" aria-hidden="true" width="18" height="18"><path d="M3 5v14M7 5v14M11 5v14M14 5v14M18 5v14M21 5v14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          Escanear producto
+        </button>
       </div>
     `;
 
@@ -2964,6 +2999,16 @@ const viewRenderers = {
           ${inputField("Costo", "cost", "number", "0", "min='0' step='100'")}
           ${inputField("Precio venta", "price", "number", "0", "min='0' step='100'")}
           ${inputField("Proveedor", "supplier", "text")}
+          <label class="field barcode-field">
+            <span>Codigo de barras</span>
+            <div class="barcode-input">
+              <input name="barcode" type="text" value="${escapeHtml(prefill.barcode || "")}" inputmode="numeric" autocomplete="off" placeholder="Escanea o escribe el codigo" />
+              <button type="button" class="scan-btn" data-scan-fill="barcode" aria-label="Escanear con la camara">
+                <svg viewBox="0 0 24 24" aria-hidden="true" width="18" height="18"><path d="M3 5v14M7 5v14M11 5v14M14 5v14M18 5v14M21 5v14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+                Escanear
+              </button>
+            </div>
+          </label>
         </div>
         <button class="primary-action" type="submit">Guardar producto</button>
       </form>
@@ -3336,7 +3381,7 @@ const viewRenderers = {
                 <span>${escapeHtml(user.id)} | ${escapeHtml(user.email)}</span>
               </div>
             </td>
-            <td>${escapeHtml(roleLabel(user.role))}<br />${escapeHtml(user.function)}${user.payrollAccess ? `<br /><span class="access-chip">Planilla</span>` : ""}</td>
+            <td>${escapeHtml(roleLabel(user.role))}<br />${escapeHtml(user.function)}${user.payrollAccess ? `<br /><span class="access-chip">Planilla</span>` : ""}${user.stockOutAccess ? `<br /><span class="access-chip">Salida inventario</span>` : ""}</td>
             <td>${escapeHtml(branchScopeLabel(user.branchScope))}</td>
             <td>${user.active ? statusBadge("Activo") : statusBadge("Pausado")}</td>
             <td><div class="permission-list">${permissionBadges}</div></td>
@@ -3383,6 +3428,19 @@ const viewRenderers = {
                   [
                     { value: "false", label: "No", selected: true },
                     { value: "true", label: "Si" }
+                  ],
+                  "false"
+                )
+              : ""
+          }
+          ${
+            currentUser()?.role === "super"
+              ? selectField(
+                  "Salida de inventario",
+                  "stockOutAccess",
+                  [
+                    { value: "false", label: "No", selected: true },
+                    { value: "true", label: "Si (puede sacar stock)" }
                   ],
                   "false"
                 )
@@ -4013,9 +4071,34 @@ function addProduct(data) {
     supplier: data.supplier.trim(),
     imageId: String(data.imageId || "").trim(),
     locationId: String(data.locationId || "").trim(),
-    spot: String(data.spot || "").trim()
+    spot: String(data.spot || "").trim(),
+    barcode: String(data.barcode || "").trim()
   });
   persistAndRender("Producto guardado");
+}
+
+// Un codigo escaneado desde la barra de inventario: si ya hay un producto con
+// ese codigo, filtra la tabla a el y muestra su stock; si no, y hay permiso de
+// inventario, abre el alta con el codigo ya puesto para registrarlo.
+function handleScannedBarcode(code) {
+  const clean = String(code || "").trim();
+  if (!clean) return;
+  if (currentModule !== "inventario") setModule("inventario", { silent: true });
+  const product = (state.products || []).find((item) => String(item.barcode || "").trim() === clean);
+  if (product) {
+    if (elements.searchInput) elements.searchInput.value = product.barcode || product.name;
+    renderView();
+    showToast(`${product.name} · stock ${product.stock} ${product.unit || ""}`.trim());
+    return;
+  }
+  if (!canWrite("inventario")) {
+    showToast(`Codigo ${clean}: no hay ningun producto con ese codigo.`);
+    return;
+  }
+  prefill = { barcode: clean };
+  renderView();
+  openDrawer();
+  showToast("Codigo nuevo. Completa los datos del producto.");
 }
 
 function addProcedure(data) {
@@ -4145,9 +4228,11 @@ function addUser(data) {
       : branchScopeValues.includes(chosenScope)
         ? chosenScope
         : "all";
-  // Acceso a planilla solo lo puede otorgar un super (el servidor tambien lo
-  // exige). Un admin creando una cuenta no puede darlo.
-  const payrollAccess = currentUser()?.role === "super" ? data.payrollAccess === "true" : false;
+  // Acceso a planilla y salida de inventario solo los otorga un super (el
+  // servidor tambien lo exige). Un admin creando una cuenta no puede darlos.
+  const isSuper = currentUser()?.role === "super";
+  const payrollAccess = isSuper ? data.payrollAccess === "true" : false;
+  const stockOutAccess = isSuper ? data.stockOutAccess === "true" : false;
   state.users.push({
     id: nextId("USR", state.users),
     name: data.name.trim(),
@@ -4156,6 +4241,7 @@ function addUser(data) {
     function: data.function.trim(),
     branchScope,
     payrollAccess,
+    stockOutAccess,
     active: true,
     // Sin contrasena: la cuenta nueva no puede entrar hasta que su dueña la
     // cree con "¿Olvidaste tu contraseña?" en el login. Asi ninguna cuenta
@@ -4174,6 +4260,32 @@ function persistAndRender(message) {
 }
 
 function handleClick(event) {
+  // Escaneo de codigos de barras. El boton "Escanear" de un formulario llena su
+  // campo; el de la barra de inventario busca el producto por su codigo.
+  const scanFillBtn = event.target.closest("[data-scan-fill]");
+  if (scanFillBtn) {
+    event.preventDefault();
+    if (typeof openBarcodeScanner !== "function") return showToast("El escaner no esta disponible.");
+    const field = scanFillBtn.dataset.scanFill;
+    const form = scanFillBtn.closest("form");
+    openBarcodeScanner((code) => {
+      const input = form?.querySelector(`[name="${field}"]`);
+      if (input) {
+        input.value = code;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.focus();
+      }
+      showToast(`Codigo leido: ${code}`);
+    });
+    return;
+  }
+  if (event.target.closest("[data-scan-lookup]")) {
+    event.preventDefault();
+    if (typeof openBarcodeScanner !== "function") return showToast("El escaner no esta disponible.");
+    openBarcodeScanner(handleScannedBarcode);
+    return;
+  }
+
   const moduleButton = event.target.closest("[data-module]");
   const menuButton = event.target.closest("[data-menu]");
   const menuAction = event.target.closest("[data-menu-module], [data-menu-switch], [data-menu-branch], [data-menu-logout], [data-menu-label]");
@@ -4526,11 +4638,16 @@ function handleRowActions(event) {
   }
 
   if (stockAdd) {
+    if (!requireWrite("inventario")) return;
     updateStock(stockAdd.dataset.stockAdd, 1, "Entrada registrada");
     return;
   }
 
   if (stockUse) {
+    if (!canTakeStockOut()) {
+      showToast("No tienes permiso para sacar productos del inventario");
+      return;
+    }
     openStockReasonModal(stockUse.dataset.stockUse);
     return;
   }

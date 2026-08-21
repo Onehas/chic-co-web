@@ -142,6 +142,60 @@ assert.equal(
   "la gerente si puede administrar el roster de su sucursal"
 );
 
+/* --- Salida de inventario (stockOutAccess): contadora ------------------- */
+
+function stockBase(stockOut) {
+  const state = baseState();
+  state.products = [{ id: "PRD-1", name: "Shampoo", stock: 10, price: 5000 }];
+  state.branches.rohrmoser.products = [{ id: "PRD-1", name: "Shampoo", stock: 10, price: 5000 }];
+  state.users.push({
+    id: "USR-CONT", name: "Conta", role: "contadora", active: true, passwordHash: "h",
+    branchScope: "all", stockOutAccess: stockOut,
+    // Contadora real: solo lectura (nada de write). Sin write en facturacion no
+    // hereda productos por esa via; la unica forma de bajar stock es el permiso
+    // de salida de inventario.
+    permissions: {
+      inventario: { read: true, write: false },
+      facturacion: { read: true, write: false },
+      proveedores: { read: true, write: false }
+    }
+  });
+  return state;
+}
+function withStock(state, stock, price) {
+  const next = structuredClone(state);
+  const product = { id: "PRD-1", name: "Shampoo", stock, price: price ?? 5000 };
+  next.products = [product];
+  next.branches.rohrmoser.products = [{ ...product }];
+  return next;
+}
+
+// Contadora CON permiso de salida: puede BAJAR stock (sacar productos).
+const soState = stockBase(true);
+const soDown = applyWritePolicy(withStock(soState, 7), soState, { userId: "USR-CONT" });
+assert.equal(soDown.branches.rohrmoser.products[0].stock, 7, "la contadora con permiso saca stock (baja)");
+
+// ...pero NO puede SUBIR stock (solo salidas), aunque tenga el permiso.
+const soUp = applyWritePolicy(withStock(soState, 20), soState, { userId: "USR-CONT" });
+assert.equal(soUp.branches.rohrmoser.products[0].stock, 10, "no puede subir stock, solo bajarlo");
+
+// ...ni reeditar el catalogo (precio) al pasar por productos.
+const soPrice = applyWritePolicy(withStock(soState, 8, 9999), soState, { userId: "USR-CONT" });
+assert.equal(soPrice.branches.rohrmoser.products[0].price, 5000, "no puede reeditar precios del catalogo");
+
+// Contadora SIN permiso de salida: no puede tocar el stock.
+const noState = stockBase(false);
+const noDown = applyWritePolicy(withStock(noState, 4), noState, { userId: "USR-CONT" });
+assert.equal(noDown.branches.rohrmoser.products[0].stock, 10, "sin permiso de salida no puede tocar stock");
+
+// Un no-super no puede OTORGAR salida de inventario; un super si.
+const grantState = stockBase(false);
+const grantNext = grantState.users.map((u) => (u.id === "USR-CONT" ? { ...u, stockOutAccess: true } : u));
+const grantByReception = clampUserRoles(grantNext, grantState, grantState.users.find((u) => u.id === "USR-003"));
+assert.equal(grantByReception.find((u) => u.id === "USR-CONT").stockOutAccess, false, "un no-super no puede dar salida de inventario");
+const grantBySuper = clampUserRoles(grantNext, grantState, grantState.users.find((u) => u.id === "USR-000"));
+assert.equal(grantBySuper.find((u) => u.id === "USR-CONT").stockOutAccess, true, "el super si puede dar salida de inventario");
+
 // La foto de un producto viaja como referencia, nunca como bytes dentro del
 // estado: el estado completo se envia en cada guardado.
 const photoCurrent = baseState();
