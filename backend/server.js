@@ -735,9 +735,27 @@ function addAuditEntry(state, user, action, collections = []) {
   state.auditLog = [entry, ...auditLog].slice(0, auditLogLimit);
 }
 
+// Umbral de "vaciado masivo": si una coleccion de datos de sucursal tenia al
+// menos estos registros y el guardado la dejaria en cero, se sospecha de un bug
+// del navegador (la app borra de a un registro, no en bloque) y se CONSERVA lo
+// guardado. El borrado real de pocos registros sigue funcionando. Es una red
+// extra a favor de "que nada se borre".
+const wipeGuardThreshold = 3;
+
+function wouldWipeBranchCollection(collectionName, currentList, nextList) {
+  if (!branchDataCollections.includes(collectionName)) return false;
+  return (
+    Array.isArray(currentList) &&
+    currentList.length >= wipeGuardThreshold &&
+    Array.isArray(nextList) &&
+    nextList.length === 0
+  );
+}
+
 function applyAllowedCollections(mergedState, nextState, collectionNames) {
   collectionNames.forEach((collectionName) => {
     if (Array.isArray(nextState?.[collectionName])) {
+      if (wouldWipeBranchCollection(collectionName, mergedState[collectionName], nextState[collectionName])) return;
       mergedState[collectionName] = cloneValue(nextState[collectionName]);
     }
   });
@@ -760,6 +778,7 @@ function applyAllowedBranchCollections(mergedState, nextState, collectionNames, 
     mergedState.branches[branchId] = mergedState.branches[branchId] || {};
     collectionNames.forEach((collectionName) => {
       if (Array.isArray(nextBranch[collectionName])) {
+        if (wouldWipeBranchCollection(collectionName, mergedState.branches[branchId][collectionName], nextBranch[collectionName])) return;
         mergedState.branches[branchId][collectionName] = cloneValue(nextBranch[collectionName]);
       }
     });
@@ -805,8 +824,20 @@ function clampUserRoles(nextUsers, currentState, requester) {
     // cuenta nueva): nadie que no sea super se da acceso a RRHH ni se lo da a otro.
     const clampPayroll = (user) =>
       requesterIsSuper ? user : { ...user, payrollAccess: current ? current.payrollAccess === true : false };
+    // Un no-super no puede PAUSAR (ni reactivar) una cuenta elevada (super o
+    // admin) ni la cuenta raiz: si pudiera, un admin dejaria fuera al super
+    // enviando su cuenta con active:false y se quedaria como unica cuenta con
+    // mando. `active` se fuerza al valor guardado en esos casos.
+    const clampActive = (user) => {
+      if (requesterIsSuper || !current) return user;
+      if (elevatedRoles.has(current.role) || user.id === "USR-000") {
+        return { ...user, active: current.active };
+      }
+      return user;
+    };
+    const clamp = (user) => clampActive(clampPayroll(user));
     if (requester && candidate.id === requester.id && current) {
-      return clampPayroll({ ...candidate, role: current.role, permissions: current.permissions });
+      return clamp({ ...candidate, role: current.role, permissions: current.permissions });
     }
     // Solo un super puede INTRODUCIR o ELEVAR a super/admin. Pero si el rol
     // enviado es elevado y coincide con el ya guardado, no es una elevacion: no
@@ -814,11 +845,11 @@ function clampUserRoles(nextUsers, currentState, requester) {
     // usuarios, cualquier guardado de un no-super (o de un admin, que tampoco es
     // super) degradaba a recepcion a TODOS los admin/super existentes.
     if (!requesterIsSuper && elevatedRoles.has(candidate.role)) {
-      if (current && current.role === candidate.role) return clampPayroll(candidate);
+      if (current && current.role === candidate.role) return clamp(candidate);
       const safeRole = current && !elevatedRoles.has(current.role) ? current.role : "recepcion";
-      return clampPayroll({ ...candidate, role: safeRole });
+      return clamp({ ...candidate, role: safeRole });
     }
-    return clampPayroll(candidate);
+    return clamp(candidate);
   });
 }
 
@@ -942,6 +973,9 @@ function applySystemUserAuth(state) {
       const { passwordHash: seedHash, ...pinned } = auth;
       const merged = { ...user, ...pinned };
       if (seedHash && !user.passwordHash) merged.passwordHash = seedHash;
+      // La cuenta raiz nunca queda pausada: si algun guardado la desactivo, se
+      // reactiva aqui. Es la ultima garantia contra un bloqueo total de super.
+      if (user.id === "USR-000") merged.active = true;
       return merged;
     })
   };
@@ -1044,8 +1078,14 @@ function assertPersistableState(nextState) {
   if (!Array.isArray(nextState.users) || !nextState.users.length) {
     throw invalid("Estado invalido: no se puede guardar sin usuarios.");
   }
-  if (!nextState.branches || typeof nextState.branches !== "object" || Array.isArray(nextState.branches)) {
+  if (!nextState.branches || typeof nextState.branches !== "object" || Array.isArray(nextState.branches) || !Object.keys(nextState.branches).length) {
     throw invalid("Estado invalido: faltan las sucursales.");
+  }
+  // Siempre debe quedar al menos un super activo, o nadie podria volver a
+  // administrar la instancia (crear cuentas, elevar roles, respaldos). Es la
+  // ultima barrera contra un bloqueo total, ademas de las de clampUserRoles.
+  if (!nextState.users.some((user) => user?.active !== false && user?.role === "super")) {
+    throw invalid("Estado invalido: debe quedar al menos un super usuario activo.");
   }
   return nextState;
 }
@@ -1676,6 +1716,13 @@ async function handlePublicBooking(req, res, url) {
     const specialist = String(payload.specialist || "").trim();
     if (!publicBooking.isKnownSpecialist(state, branchId, specialist)) {
       sendError(req, res, 400, "Esa especialista no atiende en esta sucursal.");
+      return;
+    }
+    // La especialista elegida debe poder hacer el servicio (su categoria coincide
+    // con la del procedimiento). Evita agendar, por manipulacion del formulario,
+    // a una manicurista para un facial.
+    if (!publicBooking.specialistDoesProcedure(state, branchId, specialist, procedure)) {
+      sendError(req, res, 400, "Esa especialista no realiza este servicio.");
       return;
     }
 

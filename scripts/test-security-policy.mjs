@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import assert from "node:assert/strict";
 
 const require = createRequire(import.meta.url);
-const { applyWritePolicy, stripSensitiveState, assertPersistableState, clientIp, clampUserRoles, guardUserDeletions, contentSecurityPolicy } = require("../backend/server.js");
+const { applyWritePolicy, stripSensitiveState, assertPersistableState, applySystemUserAuth, clientIp, clampUserRoles, guardUserDeletions, contentSecurityPolicy } = require("../backend/server.js");
 
 const permissions = {
   clientes: { read: true, write: true },
@@ -311,6 +311,89 @@ const delNextAdmin = structuredClone(delState);
 delNextAdmin.users = delNextAdmin.users.filter((u) => u.id !== "USR-DEL");
 const delAdminResult = applyWritePolicy(delNextAdmin, delState, { userId: "USR-ADM2" });
 assert.ok(delAdminResult.users.some((u) => u.id === "USR-DEL"), "un admin no puede eliminar via PUT: se conserva");
+
+/* --- Red anti-vaciado masivo de colecciones de sucursal ----------------- */
+
+// Una coleccion de sucursal con varios registros que llega VACIA se sospecha de
+// un bug del navegador (la app borra de a uno) y se conserva.
+const bulkCurrent = baseState();
+bulkCurrent.clients = [{ id: "CL-1" }, { id: "CL-2" }, { id: "CL-3" }, { id: "CL-4" }];
+bulkCurrent.branches.rohrmoser.clients = bulkCurrent.clients;
+const bulkNext = structuredClone(bulkCurrent);
+bulkNext.clients = [];
+bulkNext.branches.rohrmoser.clients = [];
+const bulkResult = applyWritePolicy(bulkNext, bulkCurrent, { userId: "USR-000" });
+assert.equal(bulkResult.clients.length, 4, "no se vacia una coleccion poblada de golpe (nivel superior)");
+assert.equal(bulkResult.branches.rohrmoser.clients.length, 4, "ni dentro de la sucursal");
+
+// Borrar pocos registros (bajo el umbral) sigue funcionando: aqui 2 -> 0.
+const fewCurrent = baseState();
+fewCurrent.clients = [{ id: "CL-1" }, { id: "CL-2" }];
+fewCurrent.branches.rohrmoser.clients = fewCurrent.clients;
+const fewNext = structuredClone(fewCurrent);
+fewNext.clients = [];
+fewNext.branches.rohrmoser.clients = [];
+const fewResult = applyWritePolicy(fewNext, fewCurrent, { userId: "USR-000" });
+assert.equal(fewResult.clients.length, 0, "borrar pocos registros si vacia (intencional)");
+
+// Reducir de 4 a 1 (un borrado normal) SI se aplica: solo se protege el vaciado total.
+const trimCurrent = baseState();
+trimCurrent.clients = [{ id: "CL-1" }, { id: "CL-2" }, { id: "CL-3" }, { id: "CL-4" }];
+trimCurrent.branches.rohrmoser.clients = trimCurrent.clients;
+const trimNext = structuredClone(trimCurrent);
+trimNext.clients = [{ id: "CL-1" }];
+trimNext.branches.rohrmoser.clients = [{ id: "CL-1" }];
+const trimResult = applyWritePolicy(trimNext, trimCurrent, { userId: "USR-000" });
+assert.equal(trimResult.clients.length, 1, "borrar registros uno por uno si se aplica");
+
+/* --- Un no-super no puede pausar al super ni a un admin ------------------ */
+
+const activeTree = {
+  users: [
+    { id: "USR-000", role: "super", active: true },
+    { id: "ADM", role: "admin", active: true },
+    { id: "ADM2", role: "admin", active: true },
+    { id: "REC", role: "recepcion", active: true }
+  ]
+};
+
+// Un admin intenta pausar al super: se revierte a activo.
+const pauseSuper = clampUserRoles([{ id: "USR-000", role: "super", active: false }], activeTree, asAdmin);
+assert.equal(pauseSuper[0].active, true, "un admin no puede pausar al super");
+
+// Un admin intenta pausar a otro admin: se revierte.
+const pauseAdmin = clampUserRoles([{ id: "ADM2", role: "admin", active: false }], activeTree, asAdmin);
+assert.equal(pauseAdmin[0].active, true, "un admin no puede pausar a otro admin");
+
+// Un admin SI puede pausar a una recepcion.
+const pauseRec = clampUserRoles([{ id: "REC", role: "recepcion", active: false }], activeTree, asAdmin);
+assert.equal(pauseRec[0].active, false, "un admin si puede pausar a una recepcion");
+
+// El super si puede pausar a un admin.
+const superPauseAdmin = clampUserRoles([{ id: "ADM", role: "admin", active: false }], activeTree, asSuper);
+assert.equal(superPauseAdmin[0].active, false, "el super si puede pausar a un admin");
+
+// Integrado: un admin pausando al super via PUT no lo desactiva.
+const lockState = baseState();
+lockState.users = [
+  { id: "USR-000", name: "Super", role: "super", active: true, passwordHash: "h", permissions: allPermissions },
+  { id: "USR-ADMX", name: "Admin", role: "admin", active: true, passwordHash: "h", permissions: allPermissions }
+];
+const lockNext = structuredClone(lockState);
+lockNext.users[0].active = false;
+const lockResult = applyWritePolicy(lockNext, lockState, { userId: "USR-ADMX" });
+assert.equal(lockResult.users.find((u) => u.id === "USR-000").active, true, "el super sigue activo tras el intento");
+
+// applySystemUserAuth reactiva la raiz aunque llegue pausada.
+const revived = applySystemUserAuth({ users: [{ id: "USR-000", role: "super", active: false }], branches: {} });
+assert.equal(revived.users[0].active, true, "applySystemUserAuth reactiva a USR-000");
+
+// assertPersistableState rechaza un estado sin super activo.
+assert.throws(
+  () => assertPersistableState({ users: [{ id: "X", role: "recepcion", active: true }], branches: { r: {} } }),
+  /super usuario activo/,
+  "no se puede persistir sin un super activo"
+);
 
 /* --- CSP: la pagina publica permite pixeles, el back-office no ----------- */
 
