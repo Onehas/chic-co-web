@@ -205,7 +205,9 @@ function setSecurityHeaders(req, res) {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Referrer-Policy", "no-referrer");
-  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()");
+  // camera=(self): el inventario escanea codigos de barras con la camara del
+  // propio dominio. El resto (microfono, ubicacion, pago) sigue deshabilitado.
+  res.setHeader("Permissions-Policy", "camera=(self), microphone=(), geolocation=(), payment=()");
   res.setHeader("Content-Security-Policy", contentSecurityPolicy(requestPathname(req)));
   if (requestProtocol(req) === "https") {
     res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");

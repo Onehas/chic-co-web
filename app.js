@@ -2854,7 +2854,7 @@ const viewRenderers = {
       .filter(matchesFilter)
       .filter((product) =>
         matchesSearch(
-          [product.name, product.category, product.supplier, product.unit, locationName(product.locationId), product.spot, isLowStock(product) ? "stock bajo alerta reponer" : "ok"],
+          [product.name, product.category, product.supplier, product.unit, product.barcode, locationName(product.locationId), product.spot, isLowStock(product) ? "stock bajo alerta reponer" : "ok"],
           search
         )
       )
@@ -2904,13 +2904,19 @@ const viewRenderers = {
       }</button>`;
 
     const filters = `
-      <div class="filter-bar" role="group" aria-label="Filtrar productos">
-        ${chip("all", "Todos", all.length)}
-        ${chip("low", "Bajo minimo", lowCount)}
-        ${chip("unplaced", "Sin ubicacion", unplacedCount)}
-        ${locationList()
-          .map((location) => chip(`loc:${location.id}`, location.name, productsAtLocation(location.id).length))
-          .join("")}
+      <div class="inventory-bar">
+        <div class="filter-bar" role="group" aria-label="Filtrar productos">
+          ${chip("all", "Todos", all.length)}
+          ${chip("low", "Bajo minimo", lowCount)}
+          ${chip("unplaced", "Sin ubicacion", unplacedCount)}
+          ${locationList()
+            .map((location) => chip(`loc:${location.id}`, location.name, productsAtLocation(location.id).length))
+            .join("")}
+        </div>
+        <button type="button" class="secondary-action scan-lookup-btn" data-scan-lookup aria-label="Escanear codigo de barras de un producto">
+          <svg viewBox="0 0 24 24" aria-hidden="true" width="18" height="18"><path d="M3 5v14M7 5v14M11 5v14M14 5v14M18 5v14M21 5v14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          Escanear producto
+        </button>
       </div>
     `;
 
@@ -2970,6 +2976,16 @@ const viewRenderers = {
           ${inputField("Costo", "cost", "number", "0", "min='0' step='100'")}
           ${inputField("Precio venta", "price", "number", "0", "min='0' step='100'")}
           ${inputField("Proveedor", "supplier", "text")}
+          <label class="field barcode-field">
+            <span>Codigo de barras</span>
+            <div class="barcode-input">
+              <input name="barcode" type="text" value="${escapeHtml(prefill.barcode || "")}" inputmode="numeric" autocomplete="off" placeholder="Escanea o escribe el codigo" />
+              <button type="button" class="scan-btn" data-scan-fill="barcode" aria-label="Escanear con la camara">
+                <svg viewBox="0 0 24 24" aria-hidden="true" width="18" height="18"><path d="M3 5v14M7 5v14M11 5v14M14 5v14M18 5v14M21 5v14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+                Escanear
+              </button>
+            </div>
+          </label>
         </div>
         <button class="primary-action" type="submit">Guardar producto</button>
       </form>
@@ -4019,9 +4035,34 @@ function addProduct(data) {
     supplier: data.supplier.trim(),
     imageId: String(data.imageId || "").trim(),
     locationId: String(data.locationId || "").trim(),
-    spot: String(data.spot || "").trim()
+    spot: String(data.spot || "").trim(),
+    barcode: String(data.barcode || "").trim()
   });
   persistAndRender("Producto guardado");
+}
+
+// Un codigo escaneado desde la barra de inventario: si ya hay un producto con
+// ese codigo, filtra la tabla a el y muestra su stock; si no, y hay permiso de
+// inventario, abre el alta con el codigo ya puesto para registrarlo.
+function handleScannedBarcode(code) {
+  const clean = String(code || "").trim();
+  if (!clean) return;
+  if (currentModule !== "inventario") setModule("inventario", { silent: true });
+  const product = (state.products || []).find((item) => String(item.barcode || "").trim() === clean);
+  if (product) {
+    if (elements.searchInput) elements.searchInput.value = product.barcode || product.name;
+    renderView();
+    showToast(`${product.name} · stock ${product.stock} ${product.unit || ""}`.trim());
+    return;
+  }
+  if (!canWrite("inventario")) {
+    showToast(`Codigo ${clean}: no hay ningun producto con ese codigo.`);
+    return;
+  }
+  prefill = { barcode: clean };
+  renderView();
+  openDrawer();
+  showToast("Codigo nuevo. Completa los datos del producto.");
 }
 
 function addProcedure(data) {
@@ -4180,6 +4221,32 @@ function persistAndRender(message) {
 }
 
 function handleClick(event) {
+  // Escaneo de codigos de barras. El boton "Escanear" de un formulario llena su
+  // campo; el de la barra de inventario busca el producto por su codigo.
+  const scanFillBtn = event.target.closest("[data-scan-fill]");
+  if (scanFillBtn) {
+    event.preventDefault();
+    if (typeof openBarcodeScanner !== "function") return showToast("El escaner no esta disponible.");
+    const field = scanFillBtn.dataset.scanFill;
+    const form = scanFillBtn.closest("form");
+    openBarcodeScanner((code) => {
+      const input = form?.querySelector(`[name="${field}"]`);
+      if (input) {
+        input.value = code;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.focus();
+      }
+      showToast(`Codigo leido: ${code}`);
+    });
+    return;
+  }
+  if (event.target.closest("[data-scan-lookup]")) {
+    event.preventDefault();
+    if (typeof openBarcodeScanner !== "function") return showToast("El escaner no esta disponible.");
+    openBarcodeScanner(handleScannedBarcode);
+    return;
+  }
+
   const moduleButton = event.target.closest("[data-module]");
   const menuButton = event.target.closest("[data-menu]");
   const menuAction = event.target.closest("[data-menu-module], [data-menu-switch], [data-menu-branch], [data-menu-logout], [data-menu-label]");
