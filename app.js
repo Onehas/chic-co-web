@@ -564,14 +564,15 @@ function ensureSystemUsers(users) {
     })
   );
 
-  // Las cuentas de sistema semilla existen aunque falten (backfill).
-  allowedUserIds.forEach((userId) => {
-    if (usersById.has(userId)) return;
-    const seed = defaultState.users.find((user) => user.id === userId);
-    if (seed) usersById.set(userId, normalizeUser(seed));
-  });
+  // Solo la cuenta raiz (USR-000) se garantiza siempre —ya se hizo arriba— para
+  // que nunca haya un bloqueo total de super. Las demas cuentas semilla
+  // (USR-001..004) NO se vuelven a inyectar: si el super las elimina, se quedan
+  // eliminadas. Antes se "rellenaban" al recargar y una cuenta borrada reaparecia
+  // sola (y hasta se re-guardaba en el backend). El servidor ya protege la raiz
+  // y exige al menos un super activo, asi que quitar el backfill es seguro.
 
-  // Orden estable: primero las cuentas de sistema, luego el personal agregado.
+  // Orden estable: primero las cuentas de sistema que aun existan, luego el
+  // personal agregado.
   const systemFirst = allowedUserIds.filter((id) => usersById.has(id));
   const rest = [...usersById.keys()].filter((id) => !allowedUserIds.includes(id));
   return [...systemFirst, ...rest].map((id) => usersById.get(id)).filter(Boolean);
