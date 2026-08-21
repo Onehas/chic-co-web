@@ -11,7 +11,28 @@ const mailer = require("./mailer");
 const dailyReport = require("./daily-report");
 const alegra = require("./alegra");
 const alegraConfigStore = require("./alegra-config-store");
+const settingsStore = require("./settings-store");
+const passwordResetStore = require("./password-reset-store");
 const collectionStore = require("./collection-store");
+
+// Pixeles de marketing para la pagina publica de reservas. Los ids NO son
+// secretos (viajan al navegador de cualquier visitante), pero se guardan en el
+// servidor para que un admin los configure desde la app sin redeployar.
+const trackingConfig = { metaPixelId: "", ga4Id: "", tiktokPixelId: "" };
+
+function sanitizeTrackingConfig(input = {}) {
+  // Solo se aceptan ids con la forma esperada; asi un valor pegado con espacios
+  // o comillas no rompe el script del pixel en la pagina publica.
+  const clean = (value, pattern) => {
+    const trimmed = String(value || "").trim();
+    return pattern.test(trimmed) ? trimmed : "";
+  };
+  return {
+    metaPixelId: clean(input.metaPixelId, /^[0-9]{6,20}$/),
+    ga4Id: clean(input.ga4Id, /^G-[A-Z0-9]{4,15}$/),
+    tiktokPixelId: clean(input.tiktokPixelId, /^[A-Z0-9]{10,30}$/i)
+  };
+}
 
 const rootDir = path.resolve(__dirname, "..");
 const dataDir = path.join(__dirname, "data");
@@ -19,7 +40,10 @@ const dbPath = path.join(dataDir, "chic-co-db.json");
 const port = Number(process.env.PORT || 4173);
 const host = process.env.HOST || "127.0.0.1";
 const databaseUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL || "";
-const maxBodyBytes = 2 * 1024 * 1024;
+// El estado completo viaja en cada guardado. 2 MB se quedaba corto al pensar en
+// anios de historial (los ~1800 clientes reales pesan ~0,5 MB, pero las citas y
+// facturas se acumulan). 8 MB da holgura de sobra; Postgres jsonb lo aguanta.
+const maxBodyBytes = 8 * 1024 * 1024;
 const sessionTtlMs = 8 * 60 * 60 * 1000;
 const loginWindowMs = 15 * 60 * 1000;
 const maxLoginAttempts = 8;
@@ -133,12 +157,44 @@ function isAllowedOrigin(req) {
   return origin === expectedOrigin(req);
 }
 
+// Hosts de los pixeles de marketing. Solo se permiten en la pagina publica de
+// reservas; el back-office mantiene la politica estricta 'self'.
+const pixelScriptHosts = "https://connect.facebook.net https://www.googletagmanager.com https://analytics.tiktok.com";
+const pixelConnectHosts =
+  "https://www.facebook.com https://www.google-analytics.com https://analytics.google.com https://*.analytics.google.com https://*.google-analytics.com https://analytics.tiktok.com https://*.tiktok.com";
+const pixelImgHosts = "https://www.facebook.com https://www.google-analytics.com https://*.google-analytics.com https://analytics.tiktok.com";
+
+function contentSecurityPolicy(pathname) {
+  if (pathname === "/reservar.html" || pathname === "/reservar") {
+    return [
+      "default-src 'self'",
+      `script-src 'self' 'unsafe-inline' ${pixelScriptHosts}`,
+      "style-src 'self' 'unsafe-inline'",
+      `img-src 'self' data: ${pixelImgHosts}`,
+      `connect-src 'self' ${pixelConnectHosts}`,
+      "object-src 'none'",
+      "base-uri 'self'",
+      "frame-ancestors 'none'",
+      "form-action 'self'"
+    ].join("; ");
+  }
+  return "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'";
+}
+
+function requestPathname(req) {
+  try {
+    return new URL(req.url, "http://localhost").pathname;
+  } catch (error) {
+    return String(req.url || "");
+  }
+}
+
 function setSecurityHeaders(req, res) {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()");
-  res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'");
+  res.setHeader("Content-Security-Policy", contentSecurityPolicy(requestPathname(req)));
   if (requestProtocol(req) === "https") {
     res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
   }
@@ -299,6 +355,14 @@ function isLoginRateLimited(req, email) {
 
 function recordFailedLogin(req, email) {
   const now = Date.now();
+  // Poda oportunista: bajo credential-stuffing con correos/IPs rotatorias el
+  // mapa creceria sin limite en un proceso que vive semanas. Se limpia al
+  // escribir, como el limitador publico.
+  if (loginAttempts.size > 5000) {
+    loginAttempts.forEach((value, mapKey) => {
+      if (now > value.resetAt) loginAttempts.delete(mapKey);
+    });
+  }
   loginAttemptKeys(req, email).forEach((key) => {
     const entry = loginAttempts.get(key);
     if (!entry || now > entry.resetAt) {
@@ -354,6 +418,22 @@ async function destroySession(token) {
     await pool.query("DELETE FROM app_sessions WHERE token = $1", [token]);
   } catch (error) {
     console.error("No se pudo borrar la sesion en Postgres:", error.message);
+  }
+}
+
+// Cierra TODAS las sesiones de un usuario. Se usa al restablecer la contrasena:
+// si alguien la cambia (o se la roban y la recupera el dueño), los tokens
+// viejos dejan de servir de inmediato.
+async function destroySessionsForUser(userId) {
+  for (const [token, session] of sessions) {
+    if (session.userId === userId) sessions.delete(token);
+  }
+  if (!databaseUrl) return;
+  try {
+    const pool = await getPostgresPool();
+    await pool.query("DELETE FROM app_sessions WHERE user_id = $1", [userId]);
+  } catch (error) {
+    console.error("No se pudieron borrar las sesiones del usuario:", error.message);
   }
 }
 
@@ -509,6 +589,11 @@ function writableCollectionsForUser(user) {
     if (!canWriteModule(user, moduleName)) return;
     collectionNames.forEach((collectionName) => collections.add(collectionName));
   });
+  // Administrar cuentas de personal (crear usuarios, cambiar roles/permisos) es
+  // territorio de administracion. Aunque un no-admin tuviera el permiso
+  // `usuarios.write`, no puede escribir la coleccion `users`: asi no puede
+  // fabricar cuentas con permisos ni tocar los roles de nadie.
+  collections.delete("users");
   return collections;
 }
 
@@ -631,6 +716,38 @@ function applyExtraTopLevelKeys(mergedState, nextState) {
   });
 }
 
+// Barrera contra escalada de privilegios por la coleccion `users`.
+//   - Nadie puede subirse a si mismo el rol ni los permisos con un PUT de
+//     estado: su propia cuenta conserva el rol y permisos guardados.
+//   - Solo un super puede otorgar roles de acceso total (super/admin). Un
+//     requester de menor rango que intente crear o elevar a alguien a
+//     super/admin ve ese cambio revertido a un rol seguro.
+// Las cuentas de sistema (USR-000/002/003) ya las re-fija applySystemUserAuth.
+const elevatedRoles = new Set(["super", "admin"]);
+
+function clampUserRoles(nextUsers, currentState, requester) {
+  if (!Array.isArray(nextUsers)) return nextUsers;
+  const requesterIsSuper = isSuperUser(requester);
+  const currentById = new Map((currentState?.users || []).map((item) => [item.id, item]));
+  return nextUsers.map((candidate) => {
+    const current = currentById.get(candidate.id);
+    if (requester && candidate.id === requester.id && current) {
+      return { ...candidate, role: current.role, permissions: current.permissions };
+    }
+    // Solo un super puede INTRODUCIR o ELEVAR a super/admin. Pero si el rol
+    // enviado es elevado y coincide con el ya guardado, no es una elevacion: no
+    // se toca. Sin esto, como el cliente reenvia SIEMPRE la lista completa de
+    // usuarios, cualquier guardado de un no-super (o de un admin, que tampoco es
+    // super) degradaba a recepcion a TODOS los admin/super existentes.
+    if (!requesterIsSuper && elevatedRoles.has(candidate.role)) {
+      if (current && current.role === candidate.role) return candidate;
+      const safeRole = current && !elevatedRoles.has(current.role) ? current.role : "recepcion";
+      return { ...candidate, role: safeRole };
+    }
+    return candidate;
+  });
+}
+
 // Toda escritura -tambien la de un super usuario- se fusiona coleccion por
 // coleccion sobre el estado guardado. Antes, la rama de acceso total escribia
 // el documento del cliente tal cual: un PUT parcial (un cliente desactualizado,
@@ -661,6 +778,10 @@ function applyWritePolicy(nextState, currentState, session) {
 
   applyAllowedCollections(mergedState, safeNextState, writableCollections);
   applyAllowedBranchCollections(mergedState, safeNextState, writableCollections);
+
+  if (writableCollections.has("users")) {
+    mergedState.users = clampUserRoles(mergedState.users, currentState, user);
+  }
 
   if (!canWriteModule(user, "inventario")) {
     restrictProductChanges(mergedState, currentState);
@@ -732,6 +853,10 @@ async function getPostgresPool() {
       connectionString: databaseUrl,
       max: 3
     });
+    // Sin este listener, un cliente ocioso que Postgres cierra (reinicio del
+    // proveedor, timeout de red) emite un 'error' sin manejar que TUMBA el
+    // proceso entero. Con el, el pool descarta ese cliente y sigue.
+    pgPool.on("error", (error) => console.error("Pool de Postgres (idle) fallo:", error.message));
   }
 
   if (!pgReady) {
@@ -898,6 +1023,21 @@ let stateMutationLock = Promise.resolve();
 function withStateLock(task) {
   const next = stateMutationLock.then(task, task);
   stateMutationLock = next.then(
+    () => {},
+    () => {}
+  );
+  return next;
+}
+
+// Mismo patron para las reservas publicas: revalidar el cupo y crear la
+// solicitud tienen que ocurrir sin que otra reserva concurrente se cuele en
+// medio. Sin esto, varias personas apretando a la vez sobre-reservaban el mismo
+// espacio (todas recibian 201) hasta agotar la capacidad.
+let bookingMutationLock = Promise.resolve();
+
+function withBookingLock(task) {
+  const next = bookingMutationLock.then(task, task);
+  bookingMutationLock = next.then(
     () => {},
     () => {}
   );
@@ -1262,8 +1402,23 @@ function publicRateLimited(req) {
   return entry.count > maxPublicRequestsPerIp;
 }
 
-function publicBranchLabel(branchId) {
-  return branchLabels[branchId] || branchId;
+// Etiquetas derivadas del estado: una sucursal agregada desde la app tambien
+// puede reservar, sin tener que tocar el mapa fijo. Los nombres bonitos de las
+// sucursales conocidas se conservan; una nueva usa su propio id como nombre.
+function branchLabelsFor(state) {
+  const labels = { ...branchLabels };
+  Object.keys(state?.branches || {}).forEach((id) => {
+    if (!labels[id]) labels[id] = id;
+  });
+  return labels;
+}
+
+function publicBranchLabel(branchId, state) {
+  return branchLabelsFor(state)[branchId] || branchLabels[branchId] || branchId;
+}
+
+function isBookableBranch(state, branchId) {
+  return Boolean(state?.branches?.[branchId]);
 }
 
 async function handlePublicBooking(req, res, url) {
@@ -1310,7 +1465,11 @@ async function handlePublicBooking(req, res, url) {
 
   if (pathname === "/api/public/config" && req.method === "GET") {
     const state = await ensureState();
-    sendJson(req, res, 200, { ok: true, config: publicBooking.bookingConfig(state, branchLabels) });
+    const config = publicBooking.bookingConfig(state, branchLabelsFor(state));
+    // Los pixeles configurados viajan a la pagina publica para poder trackear
+    // el recorrido del cliente desde que abre el enlace.
+    config.tracking = { ...trackingConfig };
+    sendJson(req, res, 200, { ok: true, config });
     return;
   }
 
@@ -1319,12 +1478,16 @@ async function handlePublicBooking(req, res, url) {
     const date = String(url.searchParams.get("date") || "");
     const duration = Number(url.searchParams.get("duration") || 60);
 
-    if (!branchLabels[branchId] || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      sendError(req, res, 400, "Sucursal o fecha invalida.");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      sendError(req, res, 400, "Fecha invalida.");
       return;
     }
 
     const state = await ensureState();
+    if (!isBookableBranch(state, branchId)) {
+      sendError(req, res, 400, "Sucursal invalida.");
+      return;
+    }
     const pending = await bookingStore.pendingForDay(branchId, date);
     const { slots, reason } = publicBooking.availableSlots(state, branchId, date, duration, pending);
     sendJson(req, res, 200, { ok: true, slots, reason });
@@ -1347,12 +1510,12 @@ async function handlePublicBooking(req, res, url) {
     }
 
     const branchId = String(payload.branchId || "");
-    if (!branchLabels[branchId]) {
+    const state = await ensureState();
+    if (!isBookableBranch(state, branchId)) {
       sendError(req, res, 400, "Sucursal invalida.");
       return;
     }
 
-    const state = await ensureState();
     const procedure = publicBooking
       .bookableProcedures(state, branchId)
       .find((item) => item.id === String(payload.procedureId || ""));
@@ -1380,27 +1543,33 @@ async function handlePublicBooking(req, res, url) {
 
     const date = String(payload.date || "");
     const time = String(payload.time || "");
-    const pending = await bookingStore.pendingForDay(branchId, date);
-    const problem = publicBooking.validateSlot(state, branchId, date, time, procedure.duration, pending);
-    if (problem) {
-      sendError(req, res, 409, problem);
-      return;
-    }
 
     let request;
     try {
-      request = await bookingStore.createRequest({
-        branchId,
-        procedureId: procedure.id,
-        procedureName: procedure.name,
-        date,
-        time,
-        duration: procedure.duration,
-        clientName: name,
-        clientEmail: email,
-        clientPhone: phone,
-        notes: payload.notes,
-        sourceIp: clientIp(req)
+      // Revalidar el cupo y crear la solicitud en el mismo turno del lock: los
+      // pendientes se releen adentro para que dos reservas concurrentes no
+      // pasen ambas la validacion antes de que cualquiera se guarde.
+      request = await withBookingLock(async () => {
+        const freshPending = await bookingStore.pendingForDay(branchId, date);
+        const problem = publicBooking.validateSlot(state, branchId, date, time, procedure.duration, freshPending);
+        if (problem) {
+          const conflict = new Error(problem);
+          conflict.statusCode = 409;
+          throw conflict;
+        }
+        return bookingStore.createRequest({
+          branchId,
+          procedureId: procedure.id,
+          procedureName: procedure.name,
+          date,
+          time,
+          duration: procedure.duration,
+          clientName: name,
+          clientEmail: email,
+          clientPhone: phone,
+          notes: payload.notes,
+          sourceIp: clientIp(req)
+        });
       });
     } catch (error) {
       sendError(req, res, error.statusCode || 400, error.message || "No se pudo registrar la solicitud.");
@@ -1409,7 +1578,7 @@ async function handlePublicBooking(req, res, url) {
 
     // Los correos no bloquean la respuesta: la clienta ya reservo y no tiene
     // por que esperar a que Resend conteste. Si fallan, queda en la bitacora.
-    const label = publicBranchLabel(branchId);
+    const label = publicBranchLabel(branchId, state);
     mailer.sendRequestReceived(request, label).catch(() => {});
     mailer
       .sendStaffNewRequest(
@@ -1427,6 +1596,62 @@ async function handlePublicBooking(req, res, url) {
       ok: true,
       request: { id: request.id, date: request.date, time: request.time, status: request.status }
     });
+    return;
+  }
+
+  // Solicitar un enlace de restablecimiento. Se responde 200 siempre (exista o
+  // no el correo) para no revelar que cuentas existen. Con el mismo limitador
+  // que las reservas, para que no se use como fuente de spam.
+  if (pathname === "/api/public/password-reset/request" && req.method === "POST") {
+    if (publicRateLimited(req)) {
+      sendError(req, res, 429, "Demasiadas solicitudes. Intente de nuevo mas tarde.");
+      return;
+    }
+    const payload = await readJsonBody(req);
+    const email = String(payload.email || "").trim().toLowerCase();
+    const genericOk = () => sendJson(req, res, 200, { ok: true });
+    if (!email) return genericOk();
+
+    const state = await ensureState();
+    const user = (state.users || []).find(
+      (item) => item.active !== false && String(item.email || "").trim().toLowerCase() === email
+    );
+    if (user) {
+      try {
+        const { token, minutes } = await passwordResetStore.create(user.id);
+        const resetUrl = `${expectedOrigin(req)}/?reset=${encodeURIComponent(token)}`;
+        // No bloquea la respuesta: el correo sale en segundo plano.
+        mailer.sendPasswordReset({ to: user.email, name: user.name, resetUrl, minutes }).catch(() => {});
+      } catch (error) {
+        console.error("No se pudo crear el enlace de restablecimiento:", error.message);
+      }
+    }
+    return genericOk();
+  }
+
+  // Confirmar el cambio con el token del correo.
+  if (pathname === "/api/public/password-reset/confirm" && req.method === "POST") {
+    const payload = await readJsonBody(req);
+    const token = String(payload.token || "");
+    const password = String(payload.password || "");
+    if (password.length < 10) {
+      sendError(req, res, 400, "La contrasena debe tener al menos 10 caracteres.");
+      return;
+    }
+    const userId = await passwordResetStore.consume(token);
+    if (!userId) {
+      sendError(req, res, 400, "El enlace no es valido o ya vencio. Solicita uno nuevo.");
+      return;
+    }
+    const hash = await hashPasswordModernAsync(password);
+    const ok = await setUserPasswordHash(userId, hash);
+    if (!ok) {
+      sendError(req, res, 500, "No se pudo cambiar la contrasena. Intenta de nuevo.");
+      return;
+    }
+    // Cierra cualquier sesion vieja de esa cuenta.
+    await destroySessionsForUser(userId);
+    sendJson(req, res, 200, { ok: true });
     return;
   }
 
@@ -1782,6 +2007,29 @@ async function handleAlegraConfig(req, res, session) {
   sendJson(req, res, 200, { ok: true, config: alegra.currentConfig() });
 }
 
+// Pixeles de marketing. Solo un administrador los ve o cambia. Los ids no son
+// secretos, pero centralizarlos aqui evita tocar codigo para conectar Meta,
+// Google o TikTok.
+async function handleTrackingConfig(req, res, session) {
+  const state = await ensureState();
+  const user = sessionUserFromState(state, session);
+  if (!isFullAccessUser(user)) {
+    sendError(req, res, 403, "Solo un administrador puede ver o cambiar los pixeles de marketing.");
+    return;
+  }
+
+  if (req.method === "GET") {
+    sendJson(req, res, 200, { ok: true, config: { ...trackingConfig } });
+    return;
+  }
+
+  const payload = await readJsonBody(req);
+  const clean = sanitizeTrackingConfig(payload);
+  const stored = await settingsStore.save("tracking", clean);
+  Object.assign(trackingConfig, sanitizeTrackingConfig(stored));
+  sendJson(req, res, 200, { ok: true, config: { ...trackingConfig } });
+}
+
 // Prueba la conexion con las credenciales vigentes sin emitir ninguna factura.
 async function handleAlegraTest(req, res, session) {
   const state = await ensureState();
@@ -1897,6 +2145,11 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  if (pathname === "/api/tracking/config" && (req.method === "GET" || req.method === "PUT")) {
+    await handleTrackingConfig(req, res, session);
+    return;
+  }
+
   const alegraMatch = pathname.match(/^\/api\/invoices\/([\w-]{1,40})\/alegra$/);
   if (alegraMatch && req.method === "POST") {
     await handleInvoiceToAlegra(req, res, session, alegraMatch[1]);
@@ -1945,7 +2198,19 @@ async function handleApi(req, res, url) {
 
   if (pathname === "/api/state" && req.method === "GET") {
     const state = await hydrateForClient(await ensureState());
-    sendJson(req, res, 200, { ok: true, state: stripSensitiveState(state) });
+    const user = sessionUserFromState(state, session);
+    // Una cuenta desactivada (o borrada) pierde el acceso de lectura de
+    // inmediato, sin esperar a que expire su token de 8 horas.
+    if (!user?.active) {
+      await destroySession(session.token);
+      sendError(req, res, 401, "Sesion vencida. Ingrese de nuevo.");
+      return;
+    }
+    const safe = stripSensitiveState(state);
+    // La bitacora de auditoria es solo para administradores (igual que
+    // /api/audit). No debe viajar en el estado a una cuenta de recepcion.
+    if (!isFullAccessUser(user)) delete safe.auditLog;
+    sendJson(req, res, 200, { ok: true, state: safe });
     return;
   }
 
@@ -2199,9 +2464,19 @@ async function loadStoredAlegraConfig() {
   }
 }
 
+async function loadStoredTrackingConfig() {
+  try {
+    const stored = await settingsStore.load("tracking");
+    if (stored) Object.assign(trackingConfig, sanitizeTrackingConfig(stored));
+  } catch (error) {
+    console.error("No se pudo cargar la configuracion de pixeles:", error.message);
+  }
+}
+
 // El temporizador se enciende una sola vez, cuando el servidor empieza a oir.
 server.on("listening", () => {
   loadStoredAlegraConfig();
+  loadStoredTrackingConfig();
   // El estado para el reporte y el respaldo se entrega hidratado, para que la
   // instantanea incluya las colecciones que viven en tablas de overlay.
   dailyReport.startScheduler(async () => hydrateForClient(await ensureState()), branchLabels);
@@ -2236,5 +2511,15 @@ module.exports = {
   stampRevision,
   bootstrapState,
   referencedImageIds,
-  mergeStockOnlyProducts
+  mergeStockOnlyProducts,
+  sanitizeTrackingConfig,
+  clampUserRoles,
+  contentSecurityPolicy,
+  // El esquema de sucursales y colecciones se exporta para que una prueba de
+  // paridad verifique que el cliente (app.js: branchDataKeys / branchOptions)
+  // no se desincronice del servidor. Una divergencia hace que una coleccion
+  // deje de persistir en silencio: exactamente lo que no queremos al escalar.
+  branchDataCollections,
+  branchIds,
+  moduleWriteCollections
 };

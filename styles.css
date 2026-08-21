@@ -161,21 +161,55 @@ body.is-authenticated .login-screen {
    ------------------------------------------------------------------ */
 
 .login-screen {
+  position: relative;
   display: grid;
   place-items: center;
   min-height: 100svh;
   padding: 24px;
+  overflow: hidden;
+}
+
+/* Fondo tipo aurora, sutil, para que el acceso se sienta tan cuidado como la
+   pagina publica. Se apaga con prefers-reduced-motion mas abajo. */
+.login-screen::before {
+  content: "";
+  position: absolute;
+  inset: -20% -10% auto -10%;
+  height: 620px;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(58% 58% at 22% 12%, var(--gold-soft), transparent 70%),
+    radial-gradient(52% 52% at 82% 4%, var(--accent-soft), transparent 72%);
+  filter: blur(14px);
+  opacity: 0.9;
 }
 
 .login-panel {
+  position: relative;
+  z-index: 1;
   display: grid;
   gap: 18px;
-  width: min(calc(100vw - 32px), 380px);
-  padding: 28px;
+  width: min(calc(100vw - 32px), 384px);
+  padding: 32px 30px;
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 20px;
   box-shadow: var(--shadow-3);
+  animation: login-rise 520ms var(--ease-out) both;
+}
+
+@keyframes login-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-panel {
+    animation: none;
+  }
 }
 
 .login-brand {
@@ -750,7 +784,7 @@ body.is-authenticated .login-screen {
 
 
 /* La cabecera de la vista solo aparece cuando alguien escribe en ella
-   (el modulo Hacienda lo hace). Para los modulos normales queda vacía y se
+   (algun modulo podria escribir ahi). Para los modulos normales queda vacía y se
    colapsa, en vez de repetir el título que ya está arriba. */
 .operations-head > div > :empty {
   display: none;
@@ -809,6 +843,13 @@ body.is-authenticated .login-screen {
   background: var(--surface);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
+}
+
+/* El input quita su propio outline; el anillo de foco por teclado se pinta en
+   la caja para que se vea a donde llego el foco. */
+.search-box:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .search-box span {
@@ -1808,7 +1849,7 @@ th.num {
 }
 
 /* ---------------------------------------------------------------------
-   Módulos inyectados: resumen de sucursal, herramientas y Hacienda
+   Módulos inyectados: resumen de sucursal y herramientas
    ------------------------------------------------------------------ */
 
 .branch-report,
@@ -2461,3 +2502,25 @@ th.num {
     transform: none;
   }
 }
+
+/* Controles del dashboard: periodo + exportar */
+.dash-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.dash-export {
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--ink);
+  padding: 7px 14px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s var(--ease-out), background 0.15s;
+}
+.dash-export:hover { border-color: var(--ink-3); background: var(--surface-2); }
+.dash-export:active { transform: scale(0.97); }
+@media (prefers-reduced-motion: reduce) { .dash-export:active { transform: none; } }

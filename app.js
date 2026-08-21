@@ -210,11 +210,17 @@ const moduleConfig = {
     description: "Saldos, facturas y ventas en vivo por sucursal, colaborador, servicio y producto.",
     actions: []
   },
+  integraciones: {
+    title: "Integraciones",
+    description: "Conecta las aplicaciones que usa el negocio: facturacion, marketing y correo.",
+    actions: []
+  },
   clientes: {
     title: "Clientes",
     description: "Registra informacion de contacto, historial, notas y acciones rapidas para planes o citas.",
     actions: [
       { label: "Nuevo cliente", action: "focusForm" },
+      { label: "Importar clientes", action: "importClients" },
       { label: "Crear plan", module: "planes" }
     ]
   },
@@ -363,6 +369,7 @@ const elements = {
   reasonCancelButton: document.querySelector("#reasonCancelButton"),
   reasonSecondaryCancelButton: document.querySelector("#reasonSecondaryCancelButton"),
   currentUserName: document.querySelector("#currentUserName"),
+  currentBranchName: document.querySelector("#currentBranchName"),
   loginScreen: document.querySelector("#loginScreen"),
   loginForm: document.querySelector("#loginForm"),
   loginEmail: document.querySelector("#loginEmail"),
@@ -394,6 +401,17 @@ function normalizeStateSnapshot(snapshot) {
     branches[branch.id] = normalizeBranchData(savedBranches[branch.id], fallback);
     return branches;
   }, {});
+
+  // Conserva cualquier sucursal guardada que todavia no este en branchOptions.
+  // Escalar el negocio a una tercera sucursal no debe perder su data solo
+  // porque el selector aun no la lista: sus datos viajan intactos (y el
+  // dashboard los suma) hasta que se agregue a branchOptions y sea navegable.
+  const knownBranchIds = new Set(branchOptions.map((branch) => branch.id));
+  Object.keys(savedBranches).forEach((branchId) => {
+    if (!knownBranchIds.has(branchId)) {
+      merged.branches[branchId] = normalizeBranchData(savedBranches[branchId], emptyBranchData());
+    }
+  });
 
   merged.currentBranchId = branchOptions.some((branch) => branch.id === merged.currentBranchId)
     ? merged.currentBranchId
@@ -441,17 +459,15 @@ function normalizeUser(user) {
   };
 }
 
-// Garantiza que existan las cinco cuentas autorizadas y que el super usuario
-// siga siendo super y activo. La identidad guardada (correo y nombre) manda
-// sobre la plantilla local: de lo contrario cada guardado borraria el correo
-// que el servidor tiene registrado para esa cuenta.
+// Garantiza que existan las cuentas de sistema y que el super usuario siga
+// siendo super y activo, PERO conserva todas las cuentas de personal que se
+// hayan agregado (el salon puede tener muchas colaboradoras). La identidad
+// guardada (correo y nombre) manda sobre la plantilla local: de lo contrario
+// cada guardado borraria el correo que el servidor tiene registrado.
 function ensureSystemUsers(users) {
-  const usersById = new Map(
-    users
-      .filter((user) => allowedUserIds.includes(user.id))
-      .map((user) => [user.id, normalizeUser(user)])
-  );
+  const usersById = new Map((users || []).map((user) => [user.id, normalizeUser(user)]));
 
+  // El super usuario siempre existe, es super y esta activo.
   const savedSuperUser = usersById.get(superUserAccount.id);
   usersById.set(
     superUserAccount.id,
@@ -464,7 +480,17 @@ function ensureSystemUsers(users) {
     })
   );
 
-  return allowedUserIds.map((userId) => usersById.get(userId) || normalizeUser(defaultState.users.find((user) => user.id === userId))).filter(Boolean);
+  // Las cuentas de sistema semilla existen aunque falten (backfill).
+  allowedUserIds.forEach((userId) => {
+    if (usersById.has(userId)) return;
+    const seed = defaultState.users.find((user) => user.id === userId);
+    if (seed) usersById.set(userId, normalizeUser(seed));
+  });
+
+  // Orden estable: primero las cuentas de sistema, luego el personal agregado.
+  const systemFirst = allowedUserIds.filter((id) => usersById.has(id));
+  const rest = [...usersById.keys()].filter((id) => !allowedUserIds.includes(id));
+  return [...systemFirst, ...rest].map((id) => usersById.get(id)).filter(Boolean);
 }
 
 function saveState() {
@@ -652,6 +678,15 @@ function dateToISO(date) {
   return `${year}-${month}-${day}`;
 }
 
+// Cumpleaños en formato corto "18 jun": el dia y el mes son lo util para
+// felicitar; el año se omite.
+function birthdayLabel(iso) {
+  const match = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return "";
+  const month = monthNames[Number(match[2]) - 1] || "";
+  return `${Number(match[3])} ${month.slice(0, 3).toLowerCase()}`;
+}
+
 // Sufijo aleatorio colision-resistente para el id. Sin esto, dos sesiones que
 // parten de la misma lista generan el MISMO id para registros distintos y la
 // fusion los trata como uno solo: uno pisa al otro de forma permanente y sin
@@ -745,11 +780,13 @@ function isAdminRole(user = currentUser()) {
   return Boolean(user?.active && (user.role === "super" || user.role === "admin"));
 }
 
+// Modulos de direccion, solo para administradores; no pasan por la matriz de
+// permisos por modulo.
+const adminOnlyModules = new Set(["dashboard", "integraciones"]);
+
 function canView(moduleName) {
   const user = currentUser();
-  // El dashboard de direccion es solo para administradores; no pasa por la
-  // matriz de permisos por modulo.
-  if (moduleName === "dashboard") return isAdminRole(user);
+  if (adminOnlyModules.has(moduleName)) return isAdminRole(user);
   return Boolean(user?.active && user.permissions?.[moduleName]?.read);
 }
 
@@ -854,10 +891,16 @@ function openStockReasonModal(productId) {
   elements.reasonProductName.textContent = `${product.name} | Stock actual: ${product.stock} ${product.unit}`;
   elements.reasonText.value = "";
   updateReasonWordCount();
+  reasonModalReturnFocus = document.activeElement;
   elements.reasonModal.classList.add("is-open");
   elements.reasonModal.setAttribute("aria-hidden", "false");
+  // El fondo queda inerte para que el foco no se escape por detras del modal,
+  // igual que el drawer y los demas modales.
+  document.querySelectorAll(".topbar, .app-shell").forEach((region) => (region.inert = true));
   setTimeout(() => elements.reasonText.focus(), 80);
 }
+
+let reasonModalReturnFocus = null;
 
 function closeStockReasonModal() {
   pendingStockUseProductId = "";
@@ -865,6 +908,9 @@ function closeStockReasonModal() {
   elements.reasonModal.setAttribute("aria-hidden", "true");
   elements.reasonText.value = "";
   updateReasonWordCount();
+  document.querySelectorAll(".topbar, .app-shell").forEach((region) => (region.inert = false));
+  if (reasonModalReturnFocus instanceof HTMLElement) reasonModalReturnFocus.focus();
+  reasonModalReturnFocus = null;
 }
 
 function setModule(moduleName, options = {}) {
@@ -897,6 +943,12 @@ function renderAll() {
 function renderActiveUser() {
   const user = currentUser();
   elements.currentUserName.textContent = user ? user.name : "Usuario";
+  // Mostrar la sucursal activa en la barra: los datos cambian por sucursal, asi
+  // que saber donde se esta operando de un vistazo evita errores.
+  if (elements.currentBranchName) {
+    const branch = branchOptions.find((item) => item.id === state.currentBranchId);
+    elements.currentBranchName.textContent = branch?.label || "Sucursal";
+  }
 }
 
 function renderModuleAccess() {
@@ -972,8 +1024,9 @@ function renderSummary() {
   elements.moduleMetrics.innerHTML = moduleMetrics(currentModule)
     .map(([value, label]) => `<div class="metric"><strong>${escapeHtml(value)}</strong><span>${escapeHtml(label)}</span></div>`)
     .join("");
-  if (currentModule === "dashboard") {
-    // El dashboard es de solo lectura por naturaleza; no tiene sentido el aviso.
+  if (adminOnlyModules.has(currentModule)) {
+    // El dashboard y las integraciones son de solo lectura por naturaleza; no
+    // tiene sentido el aviso de "solo lectura".
     elements.moduleActions.innerHTML = "";
     return;
   }
@@ -1036,7 +1089,17 @@ function renderLayout(stats, formTitle, formHtml, recordsTitle, recordsHtml) {
 }
 
 function renderTable(headers, rows) {
-  if (!rows.length) return `<div class="empty-state">No hay registros para mostrar con ese filtro.</div>`;
+  if (!rows.length) {
+    // "Con ese filtro" solo tiene sentido si de verdad hay una busqueda o un
+    // filtro activo; en una lista recien creada confunde.
+    const searching = (elements.searchInput?.value || "").trim().length > 0;
+    const filtering = currentModule === "inventario" && inventoryFilter !== "all";
+    const message =
+      searching || filtering
+        ? "No hay registros que coincidan con la busqueda o el filtro."
+        : "Aun no hay registros aqui. Crea el primero con el formulario de la izquierda.";
+    return `<div class="empty-state">${message}</div>`;
+  }
   return `
     <div class="table-wrap">
       <table>
@@ -1241,6 +1304,62 @@ function groupInvoiceRows(rows, keyFn) {
     .sort((a, b) => b.facturado - a.facturado);
 }
 
+// Descarga un archivo generado en el navegador.
+function downloadFile(name, content, type) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = name;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+// Exporta el dashboard del periodo activo a un CSV: los totales y los cuatro
+// desgloses en una sola hoja, listos para abrir en Excel.
+function exportDashboardReport() {
+  const period = dashboardPeriod;
+  const all = allInvoicesAcrossBranches().filter((row) => invoiceInPeriod(row.invoice, period));
+  const totals = sumInvoiceRows(all);
+  const periodLabel = dashboardPeriods.find((item) => item.id === period)?.label || period;
+  const quote = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
+  const lines = [];
+  lines.push(quote(`Reporte Chic & Co - ${periodLabel}`));
+  lines.push("");
+  lines.push(["Total", "Valor"].map(quote).join(","));
+  lines.push(["Facturado", totals.facturado].map(quote).join(","));
+  lines.push(["Cobrado", totals.cobrado].map(quote).join(","));
+  lines.push(["Saldo pendiente", totals.pendiente].map(quote).join(","));
+  lines.push(["Facturas", totals.count].map(quote).join(","));
+  lines.push(["Por cobrar", totals.pendientes].map(quote).join(","));
+
+  const sections = [
+    ["Por sucursal", groupInvoiceRows(all, (row) => row.branchName)],
+    ["Por colaborador", groupInvoiceRows(all, (row) => row.collaborator)],
+    ["Por servicio", groupInvoiceRows(all, (row) => row.procedureName)],
+    [
+      "Por producto",
+      groupInvoiceRows(
+        all.filter((row) => row.productName && Number(row.invoice.productAmount || 0) > 0),
+        (row) => row.productName
+      )
+    ]
+  ];
+  sections.forEach(([title, groups]) => {
+    lines.push("");
+    lines.push(quote(title));
+    lines.push(["Nombre", "Facturado", "Cobrado", "Saldo", "Facturas"].map(quote).join(","));
+    groups.forEach((group) => {
+      lines.push([group.key, group.facturado, group.cobrado, group.pendiente, group.count].map(quote).join(","));
+    });
+  });
+
+  downloadFile(`chic-co-reporte-${period}-${todayISO()}.csv`, "﻿" + lines.join("\n"), "text/csv;charset=utf-8");
+  showToast("Reporte exportado");
+}
+
 function dashboardBreakdownTable(title, groups, extraLabel) {
   if (!groups.length) {
     return `<section class="dash-panel"><h3>${escapeHtml(title)}</h3><p class="dash-empty">Sin datos en este periodo.</p></section>`;
@@ -1321,7 +1440,10 @@ const viewRenderers = {
             <h2>Saldos y ventas en vivo</h2>
             <p>Todas las sucursales juntas. Se actualiza solo cuando entra una factura.</p>
           </div>
-          <div class="dash-tabs" role="group" aria-label="Periodo">${periodTabs}</div>
+          <div class="dash-controls">
+            <div class="dash-tabs" role="group" aria-label="Periodo">${periodTabs}</div>
+            <button type="button" class="dash-export" data-dashboard-export>Exportar CSV</button>
+          </div>
         </div>
         <div class="dash-kpis">${kpis}</div>
         <div class="dash-grid">
@@ -1336,9 +1458,14 @@ const viewRenderers = {
 
   clientes(search) {
     const rows = state.clients
-      .filter((client) => matchesSearch([client.name, client.phone, client.email, client.notes], search))
+      .filter((client) => matchesSearch([client.name, client.phone, client.email, client.notes, client.birthday], search))
       .map(
-        (client) => `
+        (client) => {
+          const extras = [];
+          if (client.birthday) extras.push(`🎂 ${escapeHtml(birthdayLabel(client.birthday))}`);
+          if (Number(client.points) > 0) extras.push(`★ ${escapeHtml(client.points)} pts`);
+          if (Number(client.creditBalance) > 0) extras.push(`saldo ${money(client.creditBalance)}`);
+          return `
           <tr>
             <td>
               <div class="cell-title">
@@ -1346,7 +1473,10 @@ const viewRenderers = {
                 <span>${escapeHtml(client.id)} | ultima visita ${escapeHtml(client.lastVisit || "Sin fecha")}</span>
               </div>
             </td>
-            <td>${escapeHtml(client.phone)}<br />${escapeHtml(client.email)}</td>
+            <td>
+              ${escapeHtml(client.phone) || "<span class='muted-cell'>Sin telefono</span>"}<br />${escapeHtml(client.email) || "<span class='muted-cell'>Sin correo</span>"}
+              ${extras.length ? `<br /><span class="client-extras">${extras.join(" · ")}</span>` : ""}
+            </td>
             <td>${escapeHtml(client.notes)}</td>
             <td>
               <div class="inline-actions">
@@ -1357,7 +1487,8 @@ const viewRenderers = {
               </div>
             </td>
           </tr>
-        `
+        `;
+        }
       );
 
     const form = `
@@ -1366,6 +1497,7 @@ const viewRenderers = {
           ${inputField("Nombre", "name", "text", "", "required")}
           ${inputField("Telefono", "phone", "tel", "", "required")}
           ${inputField("Email", "email", "email")}
+          ${inputField("Cumpleaños", "birthday", "date")}
           ${inputField("Ultima visita", "lastVisit", "date", todayISO())}
           ${textareaField("Notas, alergias o preferencias", "notes")}
         </div>
@@ -2460,8 +2592,9 @@ function openPhotoViewer(imageId, name) {
   photoViewer.root.classList.add("is-open");
   photoViewer.root.setAttribute("aria-hidden", "false");
   // Sin esto el foco se queda en la miniatura que la foto acaba de tapar, y
-  // el tabulador recorre la pagina de detras.
+  // el tabulador recorre la pagina de detras. Ademas se vuelve inerte el fondo.
   photoViewerReturnFocus = document.activeElement;
+  document.querySelectorAll(".topbar, .app-shell").forEach((region) => (region.inert = true));
   photoViewer.close?.focus();
   loadProductImage(imageId).then((url) => {
     if (url) photoViewer.image.src = url;
@@ -2472,6 +2605,7 @@ function closePhotoViewer() {
   if (!photoViewer.root?.classList.contains("is-open")) return;
   photoViewer.root.classList.remove("is-open");
   photoViewer.root.setAttribute("aria-hidden", "true");
+  document.querySelectorAll(".topbar, .app-shell").forEach((region) => (region.inert = false));
   if (photoViewerReturnFocus instanceof HTMLElement) photoViewerReturnFocus.focus();
   photoViewerReturnFocus = null;
 }
@@ -2516,6 +2650,9 @@ function addClient(data) {
     name: data.name.trim(),
     phone: data.phone.trim(),
     email: data.email.trim(),
+    birthday: (data.birthday || "").trim(),
+    points: Number(data.points || 0),
+    creditBalance: Number(data.creditBalance || 0),
     lastVisit: data.lastVisit || todayISO(),
     notes: data.notes.trim()
   });
@@ -2575,7 +2712,7 @@ function addPlan(data) {
   const procedure = getProcedure(data.procedureId);
   const client = state.clients.find((item) => item.id === data.clientId);
   const sessionsTotal = Number(data.sessionsTotal || procedure?.sessions || 1);
-  const title = data.title.trim() || `${procedure?.name || "Plan"} - ${client?.name || "Cliente"}`;
+  const title = (data.title || "").trim() || `${procedure?.name || "Plan"} - ${client?.name || "Cliente"}`;
   const total = Number(data.total || (procedure?.price || 0) * sessionsTotal);
   const start = data.start || todayISO();
 
@@ -2592,7 +2729,7 @@ function addPlan(data) {
     paid: Number(data.paid || 0),
     total,
     status: "Activo",
-    notes: data.notes.trim()
+    notes: (data.notes || "").trim()
   });
   prefill = {};
   persistAndRender("Plan guardado");
@@ -2657,11 +2794,6 @@ function addInvoice(data) {
 }
 
 function addUser(data) {
-  if (state.users.length >= allowedUserIds.length) {
-    showToast("Solo se mantienen los 5 usuarios autorizados");
-    return;
-  }
-
   const role = rolePresets[data.role] ? data.role : "recepcion";
   state.users.push({
     id: nextId("USR", state.users),
@@ -2670,10 +2802,13 @@ function addUser(data) {
     role,
     function: data.function.trim(),
     active: true,
-    passwordHash: fallbackPasswordHash,
+    // Sin contrasena: la cuenta nueva no puede entrar hasta que su dueña la
+    // cree con "¿Olvidaste tu contraseña?" en el login. Asi ninguna cuenta
+    // arranca con una contrasena por defecto compartida.
+    passwordHash: "",
     permissions: clone(rolePresets[role].permissions)
   });
-  persistAndRender("Usuario guardado");
+  persistAndRender("Usuario creado. Pidele que entre con su correo y \"¿Olvidaste tu contraseña?\" para crear su clave.");
 }
 
 function persistAndRender(message) {
@@ -2778,6 +2913,12 @@ function handleSideAction(button) {
     return;
   }
 
+  if (button.dataset.sideAction === "importClients") {
+    if (!requireWrite("clientes")) return;
+    window.openClientImport?.();
+    return;
+  }
+
   if (button.dataset.sideAction === "showAlerts") {
     if (!canView("inventario")) {
       showToast("Este usuario no tiene acceso a inventario");
@@ -2818,6 +2959,11 @@ function handleRowActions(event) {
   if (dashboardPeriodButton) {
     dashboardPeriod = dashboardPeriodButton.dataset.dashboardPeriod;
     renderView();
+    return;
+  }
+
+  if (event.target.closest("[data-dashboard-export]")) {
+    exportDashboardReport();
     return;
   }
 
@@ -3254,7 +3400,10 @@ function openPlaceDrawer(productId) {
   drawerElements.submit.hidden = false;
   drawerReturnFocus = document.activeElement;
   document.body.classList.add("drawer-open");
-  drawerElements.root.setAttribute("aria-hidden", "false");
+  // setDrawerInert activa el panel y vuelve inerte el fondo. Sin esto el drawer
+  // quedaba con inert=true de su estado cerrado y no se podia ni enfocar ni
+  // tocar ningun campo.
+  setDrawerInert(true);
   window.setTimeout(() => drawerElements.body.querySelector("select")?.focus(), 220);
 }
 
@@ -3305,7 +3454,10 @@ function openLocationsDrawer() {
   drawerElements.submit.hidden = false;
   drawerReturnFocus = document.activeElement;
   document.body.classList.add("drawer-open");
-  drawerElements.root.setAttribute("aria-hidden", "false");
+  // Igual que openPlaceDrawer: sin setDrawerInert el panel quedaba inerte y no
+  // se podia editar ni agregar ubicaciones.
+  setDrawerInert(true);
+  window.setTimeout(() => drawerElements.body.querySelector("input, select, textarea")?.focus(), 220);
 }
 
 function saveLocationsDrawer() {

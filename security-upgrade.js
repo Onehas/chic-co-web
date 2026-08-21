@@ -873,7 +873,26 @@
       const password = elements.loginPassword.value;
       elements.loginError.textContent = "";
 
-      const login = await completeBackendLogin(email, password);
+      // Estado de carga: sin esto, en red lenta el boton no daba senal y se
+      // podia reenviar el formulario varias veces.
+      const submitButton = document.querySelector("#loginSubmit");
+      const submitLabel = submitButton?.textContent;
+      if (submitButton) {
+        submitButton.disabled = true;
+        submitButton.setAttribute("aria-busy", "true");
+        submitButton.textContent = "Entrando...";
+      }
+
+      let login;
+      try {
+        login = await completeBackendLogin(email, password);
+      } finally {
+        if (submitButton) {
+          submitButton.disabled = false;
+          submitButton.removeAttribute("aria-busy");
+          submitButton.textContent = submitLabel || "Entrar";
+        }
+      }
       if (login?.userId) {
         const user = state.users.find((item) => item.id === login.userId) || login.user;
         try {

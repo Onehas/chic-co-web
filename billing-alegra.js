@@ -89,7 +89,7 @@
           <div class="alegra-head">
             <div>
               <h2 id="alegraTitle">Conectar Alegra</h2>
-              <p class="alegra-sub">Facturacion electronica. Alegra habla con Hacienda por vos.</p>
+              <p class="alegra-sub">Facturacion electronica. Alegra emite las facturas por vos.</p>
             </div>
             <button class="alegra-close" type="button" data-alegra-cancel aria-label="Cerrar">&times;</button>
           </div>
