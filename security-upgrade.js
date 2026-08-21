@@ -1028,6 +1028,45 @@
     true
   );
 
+  // El super usuario puede fijarle una contrasena nueva a otra cuenta desde la
+  // lista de Usuarios (boton "Contrasena"). No pide la actual: es un reinicio
+  // administrativo. El servidor exige rol super y minimo 10 caracteres, y lo
+  // deja en la bitacora.
+  async function resetUserPassword(userId, name) {
+    const who = name ? ` de ${name}` : "";
+    const newPassword = window.prompt(`Contrasena nueva${who} (minimo 10 caracteres)`);
+    if (newPassword === null) return;
+    if (String(newPassword).length < 10) {
+      showToast("La contrasena nueva debe tener al menos 10 caracteres");
+      return;
+    }
+    if (window.prompt("Repita la contrasena nueva") !== newPassword) {
+      showToast("Las contrasenas no coinciden");
+      return;
+    }
+    try {
+      await backendRequest("/password", {
+        method: "POST",
+        body: JSON.stringify({ userId, newPassword })
+      });
+      showToast(`Contrasena actualizada${who}. Ya puede entrar con la nueva.`);
+    } catch (error) {
+      showToast(error.message || "No se pudo cambiar la contrasena");
+    }
+  }
+
+  document.addEventListener(
+    "click",
+    (event) => {
+      const button = event.target.closest("[data-user-reset-pw]");
+      if (!button) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      resetUserPassword(button.dataset.userResetPw, button.dataset.userName || "");
+    },
+    true
+  );
+
   setTimeout(async () => {
     const online = await hydrateBackendState();
     if (online && !backendAuthToken()) {

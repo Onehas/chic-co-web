@@ -3352,6 +3352,11 @@ const viewRenderers = {
                 <button class="row-action is-muted" type="button" data-toggle-user="${user.id}">
                   ${user.active ? "Pausar" : "Activar"}
                 </button>
+                ${
+                  currentUser()?.role === "super" && user.id !== state.currentUserId
+                    ? `<button class="row-action" type="button" data-user-reset-pw="${user.id}" data-user-name="${escapeHtml(user.name)}">Contrasena</button>`
+                    : ""
+                }
               </div>
             </td>
           </tr>
